@@ -3,6 +3,8 @@ package protocol
 import (
 	"encoding/binary"
 	"math"
+
+	"golang.org/x/text/encoding/japanese"
 )
 
 // Packet adalah unit serialisasi wire ECO: SIZE(2) | ID(2) | DATA.
@@ -77,4 +79,62 @@ func (p *Packet) PutFloatAt(v float32, index int) {
 func (p *Packet) GetFloatAt(index int) float32 {
 	p.Offset = index + 4
 	return math.Float32frombits(binary.LittleEndian.Uint32(p.Data[index:]))
+}
+
+// sjis adalah encoder/decoder Shift_JIS (padanan Global.Unicode di C#).
+var sjis = japanese.ShiftJIS
+
+func encodeSJIS(s string) []byte {
+	b, err := sjis.NewEncoder().Bytes([]byte(s))
+	if err != nil {
+		return []byte(s) // fallback: kirim apa adanya bila tak terkonversi
+	}
+	return b
+}
+
+func decodeSJIS(b []byte) string {
+	out, err := sjis.NewDecoder().Bytes(b)
+	if err != nil {
+		return string(b)
+	}
+	return string(out)
+}
+
+// PutStringAt menulis string ber-prefix panjang: [1 byte len][Shift_JIS(s+"\0")].
+func (p *Packet) PutStringAt(s string, index int) {
+	buf := encodeSJIS(s + "\x00")
+	p.ensureLen(index + 1 + len(buf))
+	p.Data[index] = byte(len(buf))
+	copy(p.Data[index+1:], buf)
+	p.Offset = index + 1 + len(buf)
+}
+
+// GetStringAt membaca string yang berakhir pada terminator 2-byte nol,
+// mengikuti logika Packet.GetString di C# (Shift_JIS).
+func (p *Packet) GetStringAt(index int) string {
+	end := index
+	for end < len(p.Data)-1 {
+		if p.Data[end] == 0 && p.Data[end+1] == 0 {
+			if (end-index)%2 != 0 {
+				end++
+			}
+			break
+		}
+		end++
+	}
+	p.Offset = end + 2
+	return decodeSJIS(trimTrailingNul(p.Data[index:end]))
+}
+
+func trimTrailingNul(b []byte) []byte {
+	for len(b) > 0 && b[len(b)-1] == 0 {
+		b = b[:len(b)-1]
+	}
+	return b
+}
+
+// SetLength menulis (len(Data)-4) sebagai big-endian uint32 ke 4 byte pertama.
+func (p *Packet) SetLength() {
+	tLen := uint32(len(p.Data) - 4)
+	binary.BigEndian.PutUint32(p.Data[0:], tLen)
 }
