@@ -46,3 +46,13 @@ func TestLoadOverride(t *testing.T) {
 		t.Errorf("DBDSN = %q salah", c.DBDSN)
 	}
 }
+
+func TestLoadPortInvalidFallsBackToDefault(t *testing.T) {
+	t.Setenv("LUMERIS_PORT_MAP", "not-a-number")
+
+	c := Load()
+
+	if c.PortMap != 12024 {
+		t.Errorf("PortMap dengan nilai invalid = %d, mau fallback 12024", c.PortMap)
+	}
+}
