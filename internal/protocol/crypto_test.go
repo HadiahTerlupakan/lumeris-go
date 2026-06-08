@@ -2,6 +2,8 @@ package protocol
 
 import (
 	"bytes"
+	"math/big"
+	"strings"
 	"testing"
 )
 
@@ -75,5 +77,97 @@ func TestAESPartialTrailingBlock(t *testing.T) {
 	dec := c.Decrypt(enc, 4)
 	if !bytes.Equal(dec, src) {
 		t.Errorf("round-trip blok parsial gagal")
+	}
+}
+
+func TestMakePrivateKeyProducesLargeDistinctKeys(t *testing.T) {
+	c1 := NewCrypto()
+	c1.MakePrivateKey()
+	c2 := NewCrypto()
+	c2.MakePrivateKey()
+
+	// priv harus berubah dari default 2, dan acak (dua instance beda).
+	if c1.privateKey.Cmp(big.NewInt(2)) == 0 {
+		t.Errorf("privateKey masih 2 setelah MakePrivateKey")
+	}
+	if c1.privateKey.Cmp(c2.privateKey) == 0 {
+		t.Errorf("dua MakePrivateKey menghasilkan priv identik (tidak acak)")
+	}
+	// pubkey sekarang harus 128 byte penuh (priv besar), bukan 1 byte.
+	pub := c1.GetKeyExchangeBytes()
+	if len(pub) < 100 {
+		t.Errorf("pubkey hanya %d byte; priv tampak terlalu kecil", len(pub))
+	}
+}
+
+// pubHex menghasilkan pubkey peer sebagai string hex uppercase (seperti wire).
+func pubHex(c *Crypto) string {
+	return strings.ToUpper(hexEncode(c.GetKeyExchangeBytes()))
+}
+
+func TestDHSharedKeyMatchesBothSides(t *testing.T) {
+	// Dua pihak DH: server & client. Masing-masing priv acak.
+	server := NewCrypto()
+	server.MakePrivateKey()
+	client := NewCrypto()
+	client.MakePrivateKey()
+
+	// Saling tukar pubkey (hex) lalu turunkan AES key.
+	server.MakeAESKeyHex(pubHex(client))
+	client.MakeAESKeyHex(pubHex(server))
+
+	if !bytes.Equal(server.aesKey, client.aesKey) {
+		t.Errorf("AES key kedua sisi beda:\n  server=%x\n  client=%x", server.aesKey, client.aesKey)
+	}
+	if len(server.aesKey) != 16 {
+		t.Errorf("aesKey len = %d, mau 16", len(server.aesKey))
+	}
+	// nibble tereduksi: tiap nibble <= 9
+	for i, b := range server.aesKey {
+		if b>>4 > 9 || b&0x0F > 9 {
+			t.Errorf("byte %d (%#x) punya nibble > 9", i, b)
+		}
+	}
+}
+
+func TestBuildServerHandshake529(t *testing.T) {
+	c := NewCrypto()
+	c.MakePrivateKey()
+
+	blob := c.BuildServerHandshake()
+	if len(blob) != 529 {
+		t.Fatalf("blob = %d byte, mau 529", len(blob))
+	}
+	// [4..7] = BE 1
+	if blob[4] != 0 || blob[5] != 0 || blob[6] != 0 || blob[7] != 1 {
+		t.Errorf("byte 4-7 = %v, mau 00 00 00 01", blob[4:8])
+	}
+	// [8] = 0x32
+	if blob[8] != 0x32 {
+		t.Errorf("byte 8 = %#x, mau 0x32", blob[8])
+	}
+	// [9..12] = BE 0x100
+	if blob[9] != 0 || blob[10] != 0 || blob[11] != 1 || blob[12] != 0 {
+		t.Errorf("byte 9-12 = %v, mau 00 00 01 00", blob[9:13])
+	}
+	// [13..268] = modulus hex LOWERCASE (256 char). Cek prefix modulus.
+	modHexLower := []byte("f488fd584e49dbcd")
+	if !bytes.Equal(blob[13:13+len(modHexLower)], modHexLower) {
+		t.Errorf("modulus hex (lowercase) salah: %s", blob[13:13+16])
+	}
+	// [269..272] = BE 0x100
+	if blob[269] != 0 || blob[270] != 0 || blob[271] != 1 || blob[272] != 0 {
+		t.Errorf("byte 269-272 = %v, mau 00 00 01 00", blob[269:273])
+	}
+	// [273..528] = pubkey hex UPPERCASE (256 char) — harus uppercase, panjang 256.
+	pub := blob[273:529]
+	if len(pub) != 256 {
+		t.Errorf("pubkey hex len = %d, mau 256", len(pub))
+	}
+	for _, ch := range pub {
+		if ch >= 'a' && ch <= 'f' {
+			t.Errorf("pubkey hex mengandung huruf kecil (harus uppercase): %s", pub)
+			break
+		}
 	}
 }
