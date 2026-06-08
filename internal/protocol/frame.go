@@ -57,6 +57,9 @@ func DecodeFrame(c *Crypto, frame []byte) ([]SubMessage, error) {
 func EncodeFrame(c *Crypto, id uint16, data []byte) []byte {
 	// sub-message: [len 2-byte BE = 2+len(data)][ID 2-byte][data]
 	subLen := 2 + len(data)
+	if subLen > 0xFFFF {
+		panic("EncodeFrame: sub-message terlalu besar (len data melebihi 65533)")
+	}
 	region := make([]byte, firstLevelLen+subLen)
 	binary.BigEndian.PutUint16(region[0:], uint16(subLen))
 	binary.BigEndian.PutUint16(region[firstLevelLen:], id)

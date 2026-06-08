@@ -69,3 +69,14 @@ func TestEncodeDecodeRoundTrip(t *testing.T) {
 		t.Errorf("round-trip data gagal: %v", subs[0].Data)
 	}
 }
+
+func TestEncodeFramePanicsOnOversizedData(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Errorf("EncodeFrame seharusnya panic untuk data > 65533 byte")
+		}
+	}()
+	c := NewCrypto()
+	c.aesKey = []byte{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15}
+	EncodeFrame(c, 0x0001, make([]byte, 65534)) // subLen = 65536 > 0xFFFF
+}
