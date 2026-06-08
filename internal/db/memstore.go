@@ -2,10 +2,11 @@ package db
 
 import (
 	"context"
+	"crypto/md5"
+	"encoding/hex"
 	"sort"
 	"sync"
 
-	"golang.org/x/crypto/bcrypt"
 	"lumeris-go/internal/model"
 )
 
@@ -57,7 +58,10 @@ func (m *MemStore) CheckPassword(ctx context.Context, username, password string)
 	if err != nil {
 		return false, err
 	}
-	if bcrypt.CompareHashAndPassword([]byte(acc.PasswordHash), []byte(password)) != nil {
+	// MD5-based comparison: hash password plaintext dan bandingkan dengan tersimpan
+	h := md5.Sum([]byte(password))
+	inputHash := hex.EncodeToString(h[:])
+	if inputHash != acc.PasswordHash {
 		return false, nil
 	}
 	return true, nil

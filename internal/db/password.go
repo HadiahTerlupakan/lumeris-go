@@ -1,14 +1,14 @@
 package db
 
-import "golang.org/x/crypto/bcrypt"
+import (
+	"crypto/md5"
+	"encoding/hex"
+)
 
-// HashPassword menghasilkan hash bcrypt dari plaintext. Dipanggil logika login
-// (Plan 4) SEBELUM CreateAccount — klien mengirim plaintext lewat koneksi AES,
-// server hash sebelum menyimpan.
+// HashPassword menghasilkan hash MD5 hex (lowercase) dari plaintext.
+// Klien ECO asli menyimpan MD5(password) di DB, bukan bcrypt.
+// Dipanggil saat register (HTTP endpoint) SEBELUM CreateAccount.
 func HashPassword(plaintext string) (string, error) {
-	b, err := bcrypt.GenerateFromPassword([]byte(plaintext), bcrypt.DefaultCost)
-	if err != nil {
-		return "", err
-	}
-	return string(b), nil
+	h := md5.Sum([]byte(plaintext))
+	return hex.EncodeToString(h[:]), nil
 }

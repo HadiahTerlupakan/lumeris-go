@@ -2,12 +2,13 @@ package db
 
 import (
 	"context"
+	"crypto/md5"
+	"encoding/hex"
 	"errors"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"golang.org/x/crypto/bcrypt"
 	"lumeris-go/internal/model"
 )
 
@@ -68,7 +69,10 @@ func (p *PostgresStore) CheckPassword(ctx context.Context, username, password st
 	if err != nil {
 		return false, err
 	}
-	if bcrypt.CompareHashAndPassword([]byte(acc.PasswordHash), []byte(password)) != nil {
+	// MD5-based comparison: hash password plaintext dan bandingkan dengan tersimpan
+	h := md5.Sum([]byte(password))
+	inputHash := hex.EncodeToString(h[:])
+	if inputHash != acc.PasswordHash {
 		return false, nil
 	}
 	return true, nil
