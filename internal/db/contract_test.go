@@ -15,7 +15,10 @@ func testStore(t *testing.T, s Store) {
 	ctx := context.Background()
 
 	// 1. CreateAccount + GetAccountByName.
-	hash, _ := HashPassword("pw")
+	hash, err := HashPassword("pw")
+	if err != nil {
+		t.Fatalf("HashPassword: %v", err)
+	}
 	acc, err := s.CreateAccount(ctx, "alice", hash)
 	if err != nil {
 		t.Fatalf("CreateAccount: %v", err)
