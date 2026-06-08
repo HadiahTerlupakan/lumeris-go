@@ -3,6 +3,7 @@ package protocol
 import (
 	"crypto/aes"
 	"crypto/rand"
+	"encoding/hex"
 	"math/big"
 )
 
@@ -78,6 +79,27 @@ func (c *Crypto) MakeAESKey(peerKeyExchange []byte) {
 
 // IsReady true bila kunci AES sudah dibuat.
 func (c *Crypto) IsReady() bool { return c.aesKey != nil }
+
+// hexEncode = byte -> string hex (huruf kecil), padanan Conversions.bytes2HexString
+// tetapi lowercase; pemanggil yang butuh uppercase memakai strings.ToUpper.
+func hexEncode(b []byte) string {
+	return hex.EncodeToString(b)
+}
+
+// MakeAESKeyHex menurunkan kunci AES dari pubkey peer dalam bentuk STRING HEX
+// (256 char), persis seperti C# MakeAESKey(string): A = parse-hex(s); R = A^priv mod M;
+// ambil 16 byte pertama; reduksi nibble (>9 -> -9).
+func (c *Crypto) MakeAESKeyHex(peerPubHex string) {
+	a, ok := new(big.Int).SetString(peerPubHex, 16)
+	if !ok {
+		c.aesKey = nil
+		return
+	}
+	r := new(big.Int).Exp(a, c.privateKey, c.modulus).Bytes()
+	key := make([]byte, 16)
+	copy(key, r)
+	c.aesKey = reduceNibbles(key)
+}
 
 // cloneBytes mengembalikan salinan baru dari b agar pemanggil selalu menerima
 // buffer independen (tidak pernah meng-alias slice input).

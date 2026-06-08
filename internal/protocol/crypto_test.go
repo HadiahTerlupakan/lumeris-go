@@ -3,6 +3,7 @@ package protocol
 import (
 	"bytes"
 	"math/big"
+	"strings"
 	"testing"
 )
 
@@ -96,5 +97,35 @@ func TestMakePrivateKeyProducesLargeDistinctKeys(t *testing.T) {
 	pub := c1.GetKeyExchangeBytes()
 	if len(pub) < 100 {
 		t.Errorf("pubkey hanya %d byte; priv tampak terlalu kecil", len(pub))
+	}
+}
+
+// pubHex menghasilkan pubkey peer sebagai string hex uppercase (seperti wire).
+func pubHex(c *Crypto) string {
+	return strings.ToUpper(hexEncode(c.GetKeyExchangeBytes()))
+}
+
+func TestDHSharedKeyMatchesBothSides(t *testing.T) {
+	// Dua pihak DH: server & client. Masing-masing priv acak.
+	server := NewCrypto()
+	server.MakePrivateKey()
+	client := NewCrypto()
+	client.MakePrivateKey()
+
+	// Saling tukar pubkey (hex) lalu turunkan AES key.
+	server.MakeAESKeyHex(pubHex(client))
+	client.MakeAESKeyHex(pubHex(server))
+
+	if !bytes.Equal(server.aesKey, client.aesKey) {
+		t.Errorf("AES key kedua sisi beda:\n  server=%x\n  client=%x", server.aesKey, client.aesKey)
+	}
+	if len(server.aesKey) != 16 {
+		t.Errorf("aesKey len = %d, mau 16", len(server.aesKey))
+	}
+	// nibble tereduksi: tiap nibble <= 9
+	for i, b := range server.aesKey {
+		if b>>4 > 9 || b&0x0F > 9 {
+			t.Errorf("byte %d (%#x) punya nibble > 9", i, b)
+		}
 	}
 }
