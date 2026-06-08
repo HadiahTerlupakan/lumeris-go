@@ -2,6 +2,7 @@ package protocol
 
 import (
 	"crypto/aes"
+	"crypto/rand"
 	"math/big"
 )
 
@@ -33,6 +34,19 @@ func NewCrypto() *Crypto {
 func (c *Crypto) GetKeyExchangeBytes() []byte {
 	r := new(big.Int).Exp(c.base, c.privateKey, c.modulus)
 	return r.Bytes()
+}
+
+// MakePrivateKey mengacak privateKey menjadi bilangan besar (~320-bit) agar
+// pubkey (base^priv mod M) berukuran penuh, seperti Encryption.MakePrivateKey di C#.
+// Nilai persis priv tidak perlu cocok dengan C#: tiap sisi DH punya priv sendiri,
+// hanya AES key turunan (simetris) yang harus sama.
+func (c *Crypto) MakePrivateKey() {
+	buf := make([]byte, 40)
+	if _, err := rand.Read(buf); err != nil {
+		// fallback deterministik sangat tak mungkin terpakai; tetap > 2.
+		buf[0] = 0x6F
+	}
+	c.privateKey = new(big.Int).SetBytes(buf)
 }
 
 // reduceNibbles: untuk tiap byte, jika nibble atas/bawah > 9 maka dikurangi 9.

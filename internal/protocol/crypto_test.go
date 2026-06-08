@@ -2,6 +2,7 @@ package protocol
 
 import (
 	"bytes"
+	"math/big"
 	"testing"
 )
 
@@ -75,5 +76,25 @@ func TestAESPartialTrailingBlock(t *testing.T) {
 	dec := c.Decrypt(enc, 4)
 	if !bytes.Equal(dec, src) {
 		t.Errorf("round-trip blok parsial gagal")
+	}
+}
+
+func TestMakePrivateKeyProducesLargeDistinctKeys(t *testing.T) {
+	c1 := NewCrypto()
+	c1.MakePrivateKey()
+	c2 := NewCrypto()
+	c2.MakePrivateKey()
+
+	// priv harus berubah dari default 2, dan acak (dua instance beda).
+	if c1.privateKey.Cmp(big.NewInt(2)) == 0 {
+		t.Errorf("privateKey masih 2 setelah MakePrivateKey")
+	}
+	if c1.privateKey.Cmp(c2.privateKey) == 0 {
+		t.Errorf("dua MakePrivateKey menghasilkan priv identik (tidak acak)")
+	}
+	// pubkey sekarang harus 128 byte penuh (priv besar), bukan 1 byte.
+	pub := c1.GetKeyExchangeBytes()
+	if len(pub) < 100 {
+		t.Errorf("pubkey hanya %d byte; priv tampak terlalu kecil", len(pub))
 	}
 }
