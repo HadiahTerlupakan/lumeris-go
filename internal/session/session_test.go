@@ -40,7 +40,9 @@ func TestSessionRunDispatchAndSend(t *testing.T) {
 		t.Fatal("handler tidak terpanggil dalam 2 detik")
 	}
 
-	// Balasan server (PONG) harus terbaca di klien.
+	// Balasan server (PONG) harus terbaca di klien (time-boxed agar gagal cepat
+	// bila reply tak pernah datang, bukan menggantung sampai timeout global).
+	_ = cc.SetReadDeadline(time.Now().Add(2 * time.Second))
 	subs, err := ReadFrame(cc, cCrypto)
 	if err != nil {
 		t.Fatalf("ReadFrame (klien) error: %v", err)
