@@ -65,15 +65,23 @@ func (c *Crypto) MakeAESKey(peerKeyExchange []byte) {
 // IsReady true bila kunci AES sudah dibuat.
 func (c *Crypto) IsReady() bool { return c.aesKey != nil }
 
+// cloneBytes mengembalikan salinan baru dari b agar pemanggil selalu menerima
+// buffer independen (tidak pernah meng-alias slice input).
+func cloneBytes(b []byte) []byte {
+	out := make([]byte, len(b))
+	copy(out, b)
+	return out
+}
+
 // Encrypt mengenkripsi src mulai dari offset memakai AES-128-ECB tanpa padding,
 // blok-per-blok 16 byte; sisa < 16 byte ditransform apa adanya (replika C#).
 func (c *Crypto) Encrypt(src []byte, offset int) []byte {
 	if c.aesKey == nil || offset >= len(src) {
-		return src
+		return cloneBytes(src)
 	}
 	block, err := aes.NewCipher(c.aesKey)
 	if err != nil {
-		return src
+		return cloneBytes(src)
 	}
 	out := make([]byte, len(src))
 	copy(out, src)
@@ -84,11 +92,11 @@ func (c *Crypto) Encrypt(src []byte, offset int) []byte {
 // Decrypt kebalikan dari Encrypt.
 func (c *Crypto) Decrypt(src []byte, offset int) []byte {
 	if c.aesKey == nil || offset >= len(src) {
-		return src
+		return cloneBytes(src)
 	}
 	block, err := aes.NewCipher(c.aesKey)
 	if err != nil {
-		return src
+		return cloneBytes(src)
 	}
 	out := make([]byte, len(src))
 	copy(out, src)
