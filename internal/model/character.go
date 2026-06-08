@@ -26,4 +26,16 @@ type Character struct {
 	Agi        int
 	Mnd        int
 	Appearance Appearance
+	// Field tambahan untuk char-list packet (Plan 4)
+	Race           byte // 0=Emilia, 1=Titania, 2=DEM, 3=Dominion
+	Gender         byte // 0=Male, 1=Female
+	Form           byte // Job-specific form/class variant
+	Wig            byte // 0xFF = no wig
+	Face           int  // Face ID (int untuk konsistensi dengan packet)
+	QuestRemaining int  // Quest slots remaining (default 3)
+	JobLevel1      int  // Level job pertama
+	JobLevel2X     int  // Level job kedua (X path)
+	JobLevel2T     int  // Level job kedua (T path)
+	JobLevel3      int  // Level job ketiga
+	Rebirth        bool // True jika karakter rebirth
 }

@@ -35,10 +35,10 @@ func isForeignKeyViolation(err error) bool {
 }
 
 func (p *PostgresStore) CreateAccount(ctx context.Context, username, passwordHash string) (*model.Account, error) {
-	acc := &model.Account{Username: username, PasswordHash: passwordHash}
+	acc := &model.Account{Username: username, PasswordHash: passwordHash, DeletePass: "0000"}
 	err := p.pool.QueryRow(ctx,
-		`INSERT INTO accounts(username, password_hash) VALUES($1,$2) RETURNING id, gm_level, banned`,
-		username, passwordHash,
+		`INSERT INTO accounts(username, password_hash, deletepass) VALUES($1,$2,$3) RETURNING id, gm_level, banned`,
+		username, passwordHash, acc.DeletePass,
 	).Scan(&acc.ID, &acc.GMLevel, &acc.Banned)
 	if isUniqueViolation(err) {
 		return nil, ErrDuplicate
@@ -52,9 +52,9 @@ func (p *PostgresStore) CreateAccount(ctx context.Context, username, passwordHas
 func (p *PostgresStore) GetAccountByName(ctx context.Context, username string) (*model.Account, error) {
 	acc := &model.Account{Username: username}
 	err := p.pool.QueryRow(ctx,
-		`SELECT id, password_hash, gm_level, banned FROM accounts WHERE username=$1`,
+		`SELECT id, password_hash, deletepass, gm_level, banned FROM accounts WHERE username=$1`,
 		username,
-	).Scan(&acc.ID, &acc.PasswordHash, &acc.GMLevel, &acc.Banned)
+	).Scan(&acc.ID, &acc.PasswordHash, &acc.DeletePass, &acc.GMLevel, &acc.Banned)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -98,11 +98,14 @@ func (p *PostgresStore) CharsByAccount(ctx context.Context, accountID int64) ([]
 func (p *PostgresStore) CreateCharacter(ctx context.Context, c *model.Character) error {
 	err := p.pool.QueryRow(ctx,
 		`INSERT INTO characters
-		 (account_id, slot, name, job, level, map_id, x, y, hp, maxhp, sp, maxsp, str, dex, int_, vit, agi, mnd, appearance)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
+		 (account_id, slot, name, job, level, map_id, x, y, hp, maxhp, sp, maxsp, str, dex, int_, vit, agi, mnd, appearance,
+		  race, gender, form, wig, face_id, quest_remaining, job_level_1, job_level_2x, job_level_2t, job_level_3, rebirth)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,
+		         $20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30)
 		 RETURNING id`,
 		c.AccountID, c.Slot, c.Name, c.Job, c.Level, c.MapID, c.X, c.Y, c.HP, c.MaxHP, c.SP, c.MaxSP,
 		c.Str, c.Dex, c.Int, c.Vit, c.Agi, c.Mnd, c.Appearance,
+		c.Race, c.Gender, c.Form, c.Wig, c.Face, c.QuestRemaining, c.JobLevel1, c.JobLevel2X, c.JobLevel2T, c.JobLevel3, c.Rebirth,
 	).Scan(&c.ID)
 	if isUniqueViolation(err) {
 		return ErrDuplicate
@@ -143,10 +146,13 @@ func (p *PostgresStore) SaveCharacter(ctx context.Context, c *model.Character) e
 	tag, err := p.pool.Exec(ctx,
 		`UPDATE characters SET
 		 slot=$2, name=$3, job=$4, level=$5, map_id=$6, x=$7, y=$8, hp=$9, maxhp=$10, sp=$11, maxsp=$12,
-		 str=$13, dex=$14, int_=$15, vit=$16, agi=$17, mnd=$18, appearance=$19
+		 str=$13, dex=$14, int_=$15, vit=$16, agi=$17, mnd=$18, appearance=$19,
+		 race=$20, gender=$21, form=$22, wig=$23, face_id=$24, quest_remaining=$25,
+		 job_level_1=$26, job_level_2x=$27, job_level_2t=$28, job_level_3=$29, rebirth=$30
 		 WHERE id=$1`,
 		c.ID, c.Slot, c.Name, c.Job, c.Level, c.MapID, c.X, c.Y, c.HP, c.MaxHP, c.SP, c.MaxSP,
 		c.Str, c.Dex, c.Int, c.Vit, c.Agi, c.Mnd, c.Appearance,
+		c.Race, c.Gender, c.Form, c.Wig, c.Face, c.QuestRemaining, c.JobLevel1, c.JobLevel2X, c.JobLevel2T, c.JobLevel3, c.Rebirth,
 	)
 	if err != nil {
 		return err
@@ -158,7 +164,7 @@ func (p *PostgresStore) SaveCharacter(ctx context.Context, c *model.Character) e
 }
 
 // selectCharCols = daftar kolom karakter, urut sesuai scanCharacter.
-const selectCharCols = `SELECT id, account_id, slot, name, job, level, map_id, x, y, hp, maxhp, sp, maxsp, str, dex, int_, vit, agi, mnd, appearance FROM characters`
+const selectCharCols = `SELECT id, account_id, slot, name, job, level, map_id, x, y, hp, maxhp, sp, maxsp, str, dex, int_, vit, agi, mnd, appearance, race, gender, form, wig, face_id, quest_remaining, job_level_1, job_level_2x, job_level_2t, job_level_3, rebirth FROM characters`
 
 // scanCharacter membaca satu baris karakter (urut kolom = selectCharCols).
 func scanCharacter(rows pgx.Rows) (*model.Character, error) {
@@ -166,6 +172,7 @@ func scanCharacter(rows pgx.Rows) (*model.Character, error) {
 	err := rows.Scan(
 		&c.ID, &c.AccountID, &c.Slot, &c.Name, &c.Job, &c.Level, &c.MapID, &c.X, &c.Y,
 		&c.HP, &c.MaxHP, &c.SP, &c.MaxSP, &c.Str, &c.Dex, &c.Int, &c.Vit, &c.Agi, &c.Mnd, &c.Appearance,
+		&c.Race, &c.Gender, &c.Form, &c.Wig, &c.Face, &c.QuestRemaining, &c.JobLevel1, &c.JobLevel2X, &c.JobLevel2T, &c.JobLevel3, &c.Rebirth,
 	)
 	if err != nil {
 		return nil, err

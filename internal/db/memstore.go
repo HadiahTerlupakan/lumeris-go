@@ -37,7 +37,12 @@ func (m *MemStore) CreateAccount(ctx context.Context, username, passwordHash str
 		}
 	}
 	m.nextAccID++
-	acc := &model.Account{ID: m.nextAccID, Username: username, PasswordHash: passwordHash}
+	acc := &model.Account{
+		ID:           m.nextAccID,
+		Username:     username,
+		PasswordHash: passwordHash,
+		DeletePass:   "0000",
+	}
 	m.accounts[acc.ID] = acc
 	return cloneAccount(acc), nil
 }
