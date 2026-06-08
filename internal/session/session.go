@@ -18,6 +18,9 @@ type Session struct {
 	outbound  chan []byte
 	done      chan struct{}
 	closeOnce sync.Once
+	// Context menyimpan state aplikasi per-session (front/back word, akun auth, char list).
+	// Handler login men-cast ini ke struct konkret sesuai fase (Validation vs Login).
+	Context any
 }
 
 // New membuat Session siap-jalan (kripto baru, belum handshake).
