@@ -18,7 +18,7 @@
 3. `offset` awal sebuah packet = **4** (2 byte size + 2 byte ID dilewati).
 4. String = **Shift_JIS** (`Global.Unicode`). Format `PutString`: 1 byte panjang + bytes(`s` + `\0`). `PutTSTR`: 1 byte panjang + bytes(`s`) tanpa null.
 5. DH: modulus 128-byte hex (lihat Task 6), base = **2**, privateKey default = **2** (`MakePrivateKey` jarang dipakai). `GetKeyExchangeBytes = 2^priv mod M`. `MakeAESKey(A) = (A^priv mod M)`, ambil **16 byte pertama**, lalu tiap nibble (atas & bawah tiap byte) **jika > 9 dikurangi 9**.
-6. AES = **AES-128, mode ECB, padding None**, IV diabaikan (ECB). Enkrip/dekrip dilakukan **manual per-blok 16 byte** mulai dari `offset` (sisa < 16 byte di-transform apa adanya — lihat loop C# `Decrypt`).
+6. AES = **AES-128, mode ECB, padding None**, IV diabaikan (ECB). Enkrip/dekrip dilakukan **manual per-blok 16 byte** mulai dari `offset`. **PENTING (dikoreksi saat implementasi):** sisa < 16 byte **TIDAK ditransform** — dibiarkan apa adanya (passthrough). Sebab `.NET TransformBlock` dengan `PaddingMode.None` hanya memproses blok penuh 16-byte; karena C# `Encrypt`/`Decrypt` menyalin `src` ke buffer keluaran lebih dulu, byte sisa tetap = plaintext asli. (Catatan plan awal "di-transform apa adanya / pad nol" KELIRU — pad-and-truncate mustahil round-trip.)
 7. `SetLength`: tulis `(data.Length - 4)` sebagai **big-endian uint** ke 4 byte pertama. (CATATAN: di C# size disimpan di 4 byte, tapi wire SIZE = 2 byte; ditangani di framing plan berikutnya — Plan 1 cukup replika fungsi apa adanya + uji.)
 
 ---
@@ -770,15 +770,23 @@ import (
 	"crypto/aes"
 )
 
+// cloneBytes mengembalikan salinan baru b (agar hasil tak pernah aliasing input).
+func cloneBytes(b []byte) []byte {
+	out := make([]byte, len(b))
+	copy(out, b)
+	return out
+}
+
 // Encrypt mengenkripsi src mulai dari offset memakai AES-128-ECB tanpa padding,
-// blok-per-blok 16 byte; sisa < 16 byte ditransform apa adanya (replika C#).
+// blok-per-blok 16 byte; sisa < 16 byte DIBIARKAN apa adanya (passthrough, replika C#).
+// Selalu mengembalikan slice baru (tak pernah aliasing src).
 func (c *Crypto) Encrypt(src []byte, offset int) []byte {
 	if c.aesKey == nil || offset >= len(src) {
-		return src
+		return cloneBytes(src)
 	}
 	block, err := aes.NewCipher(c.aesKey)
 	if err != nil {
-		return src
+		return cloneBytes(src)
 	}
 	out := make([]byte, len(src))
 	copy(out, src)
@@ -789,11 +797,11 @@ func (c *Crypto) Encrypt(src []byte, offset int) []byte {
 // Decrypt kebalikan dari Encrypt.
 func (c *Crypto) Decrypt(src []byte, offset int) []byte {
 	if c.aesKey == nil || offset >= len(src) {
-		return src
+		return cloneBytes(src)
 	}
 	block, err := aes.NewCipher(c.aesKey)
 	if err != nil {
-		return src
+		return cloneBytes(src)
 	}
 	out := make([]byte, len(src))
 	copy(out, src)
@@ -802,28 +810,18 @@ func (c *Crypto) Decrypt(src []byte, offset int) []byte {
 }
 
 // transformECB menjalankan fn (Encrypt/Decrypt blok 16-byte) atas src[offset:],
-// menyalin hasil ke out[offset:]. Untuk blok penuh 16 byte panggil fn langsung.
-// Untuk sisa < 16 byte, salin ke buffer 16-byte, transform, ambil sebanyak sisa
-// (meniru perilaku TransformBlock C# pada blok pendek).
+// menyalin hasil ke out[offset:]. HANYA blok penuh 16 byte yang ditransform.
+// Sisa < 16 byte dibiarkan apa adanya — out sudah berisi salinan src, jadi byte
+// sisa = plaintext asli (passthrough), persis perilaku .NET TransformBlock dengan
+// PaddingMode.None yang hanya memproses blok penuh.
 func transformECB(fn func(dst, src []byte), src, out []byte, offset int) {
-	for i := offset; i < len(src); i += 16 {
-		n := 16
-		if len(src)-i < 16 {
-			n = len(src) - i
-		}
-		if n == 16 {
-			fn(out[i:i+16], src[i:i+16])
-		} else {
-			tmp := make([]byte, 16)
-			copy(tmp, src[i:i+n])
-			fn(tmp, tmp)
-			copy(out[i:i+n], tmp[:n])
-		}
+	for i := offset; i+16 <= len(src); i += 16 {
+		fn(out[i:i+16], src[i:i+16])
 	}
 }
 ```
 
-> **Catatan blok parsial:** AES beroperasi pada blok 16 byte; `block.Encrypt` butuh tepat 16 byte. C# `TransformBlock` pada sisa pendek tetap memproses 16-byte internal lalu menyalin `n` byte. Replika di atas memakai buffer 16-byte yang di-pad nol. **Apakah ini byte-exact dengan C#** untuk blok parsial diverifikasi di Task 8 (capture). Bila ECO tidak pernah mengirim payload non-kelipatan-16 setelah offset, jalur ini tak terpakai — namun tetap diuji round-trip agar konsisten internal.
+> **Catatan blok parsial (dikoreksi saat implementasi):** Rencana awal menyebut "pad ke 16 byte lalu ambil n byte" — itu KELIRU dan mustahil round-trip (memotong ciphertext membuang data untuk inversi). Diverifikasi terhadap `Encryption.cs`: `.NET TransformBlock` dengan `PaddingMode.None` hanya memproses blok penuh 16-byte; karena C# menyalin `src` ke buffer keluaran lebih dulu, byte sisa < 16 tetap = plaintext asli (passthrough). Implementasi final memproses hanya blok penuh dan membiarkan sisa. Tetap diverifikasi byte-exact via capture di Task 8.
 
 - [ ] **Step 4: Jalankan test, pastikan lulus**
 
