@@ -7,9 +7,10 @@ import (
 // BuildVersionACK membuat SSMG_VERSION_ACK packet.
 // result: 0 = OK, 0xFFFF = version mismatch
 // versionBytes: 6 byte version info dari klien (echo back)
+// Layout: result uint16@offset2, version 6 bytes@offset4
 func BuildVersionACK(result uint16, versionBytes []byte) []byte {
 	buf := make([]byte, 10)
-	putUint16BE(buf, 0, result)
+	putUint16BE(buf, 2, result)  // result di offset 2, bukan 0!
 	if len(versionBytes) >= 6 {
 		copy(buf[4:10], versionBytes[:6])
 	}
