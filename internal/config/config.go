@@ -18,6 +18,7 @@ type Config struct {
 	ListenMap        string // Computed: 0.0.0.0:PortMap
 	PublicIP         string
 	ClientEncoding   string
+	DevMode          bool   // Development mode: bypass password check
 }
 
 // Load membaca konfigurasi dari environment variable, memakai default bila kosong.
@@ -26,6 +27,7 @@ func Load() Config {
 	portLogin := envInt("LUMERIS_PORT_LOGIN", 12023)
 	portMap := envInt("LUMERIS_PORT_MAP", 12024)
 	portHTTP := envInt("LUMERIS_PORT_HTTP", 8001)
+	devMode := envStr("LUMERIS_DEV_MODE", "true") == "true" // Default true for development
 
 	return Config{
 		DBDSN:            envStr("LUMERIS_DB_DSN", "postgres://lumeris:lumeris@localhost:5432/lumeris?sslmode=disable"),
@@ -38,6 +40,7 @@ func Load() Config {
 		ListenMap:        fmt.Sprintf("0.0.0.0:%d", portMap),
 		PublicIP:         envStr("LUMERIS_PUBLIC_IP", "127.0.0.1"),
 		ClientEncoding:   envStr("LUMERIS_CLIENT_ENCODING", "Shift_JIS"),
+		DevMode:          devMode,
 	}
 }
 

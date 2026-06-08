@@ -44,8 +44,13 @@ func main() {
 	// Create Store
 	store := db.NewPostgresStore(pool)
 
+	// Log dev mode status
+	if cfg.DevMode {
+		log.Println("⚠️  DEV MODE ENABLED: Password verification BYPASSED!")
+	}
+
 	// Start Validation listener (:12022)
-	validationHandler := login.NewValidationHandler(store)
+	validationHandler := login.NewValidationHandler(store, cfg.DevMode)
 	validationListener := netio.New(cfg.ListenValidation, validationHandler.Dispatch())
 	if err := validationListener.Start(); err != nil {
 		log.Fatalf("Validation listener error: %v", err)
@@ -53,7 +58,7 @@ func main() {
 	log.Printf("Validation server listening on %s", cfg.ListenValidation)
 
 	// Start Login listener (:12023)
-	loginHandler := login.NewLoginHandler(store)
+	loginHandler := login.NewLoginHandler(store, cfg.DevMode)
 	loginListener := netio.New(cfg.ListenLogin, loginHandler.Dispatch())
 	if err := loginListener.Start(); err != nil {
 		log.Fatalf("Login listener error: %v", err)

@@ -23,12 +23,13 @@ type LoginContext struct {
 
 // LoginHandler adalah dispatcher untuk Login server (:12023).
 type LoginHandler struct {
-	store db.Store
+	store   db.Store
+	devMode bool
 }
 
 // NewLoginHandler membuat handler baru.
-func NewLoginHandler(store db.Store) *LoginHandler {
-	return &LoginHandler{store: store}
+func NewLoginHandler(store db.Store, devMode bool) *LoginHandler {
+	return &LoginHandler{store: store, devMode: devMode}
 }
 
 // Dispatch mengembalikan dispatch table untuk Login server.
@@ -52,6 +53,12 @@ func (h *LoginHandler) OnSendVersion(s *session.Session, data []byte) error {
 		log.Printf("[Login] ParseSendVersion error: %v", err)
 		return err
 	}
+
+	// Sesuai C# SagaLogin/Network/Client/LoginClient.Login.cs
+	// Login server JUGA mengirim mystery packet yang sama seperti Validation
+	mysteryBody := []byte{0xE8, 0x6A, 0x6A, 0xCA, 0xDC, 0xE8, 0x06, 0x05, 0x2B, 0x29, 0xF8, 0x96, 0x2F, 0x86, 0x7C, 0xAB, 0x2A, 0x57, 0xAD, 0x30}
+	s.Send(0xFFFF, mysteryBody)
+	log.Printf("[Login] Sent mystery packet (ID=0xFFFF, body=20 bytes)")
 
 	s.Send(SSMG_VERSION_ACK, BuildVersionACK(0, parsed.VersionBytes[:]))
 
@@ -96,11 +103,15 @@ func (h *LoginHandler) OnLogin(s *session.Session, data []byte) error {
 		return nil
 	}
 
-	// Verifikasi SHA1 challenge
-	if !auth.VerifyChallenge(acc.PasswordHash, lctx.FrontWord, lctx.BackWord, parsed.Password) {
-		log.Printf("[Login] Login gagal: password salah (%s)", parsed.Username)
-		s.Send(SSMG_LOGIN_ACK, BuildLoginACK(LOGIN_BADPASS, 0))
-		return nil
+	// Verifikasi SHA1 challenge (bypass in dev mode)
+	if h.devMode {
+		log.Printf("[Login] DEV MODE: Password check BYPASSED for %s", parsed.Username)
+	} else {
+		if !auth.VerifyChallenge(acc.PasswordHash, lctx.FrontWord, lctx.BackWord, parsed.Password) {
+			log.Printf("[Login] Login gagal: password salah (%s)", parsed.Username)
+			s.Send(SSMG_LOGIN_ACK, BuildLoginACK(LOGIN_BADPASS, 0))
+			return nil
+		}
 	}
 
 	if acc.Banned {

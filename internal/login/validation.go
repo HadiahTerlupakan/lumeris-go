@@ -21,12 +21,13 @@ type ValidationContext struct {
 
 // ValidationHandler adalah dispatcher untuk Validation server (:12022).
 type ValidationHandler struct {
-	store db.Store
+	store   db.Store
+	devMode bool
 }
 
 // NewValidationHandler membuat handler baru.
-func NewValidationHandler(store db.Store) *ValidationHandler {
-	return &ValidationHandler{store: store}
+func NewValidationHandler(store db.Store, devMode bool) *ValidationHandler {
+	return &ValidationHandler{store: store, devMode: devMode}
 }
 
 // Dispatch mengembalikan dispatch table untuk Validation server.
@@ -50,16 +51,20 @@ func (h *ValidationHandler) OnSendVersion(s *session.Session, data []byte) error
 
 	log.Printf("[Validation] Client version bytes: %02x", parsed.VersionBytes)
 
-	// HAPUS mystery packet - NekogameECO TIDAK mengirim ini!
-	// Dari proxy capture, flow langsung: VERSION_ACK → LOGIN_ALLOWED
-	// Client tidak expect mystery packet 0xFFFF
+	// Sesuai docs/protocol/login-flow-tahap-1-4.md line 71 & C# ValidationClient.cs:191-195
+	// Mystery packet: FF FF E8 6A 6A CA DC E8 06 05 2B 29 F8 96 2F 86 7C AB 2A 57 AD 30
+	// C# membuat Packet object dengan p3.data = buf, lalu SendPacket(p3)
+	// Byte pertama FF FF adalah packet ID (0xFFFF), sisanya adalah body (20 bytes)
+	mysteryBody := []byte{0xE8, 0x6A, 0x6A, 0xCA, 0xDC, 0xE8, 0x06, 0x05, 0x2B, 0x29, 0xF8, 0x96, 0x2F, 0x86, 0x7C, 0xAB, 0x2A, 0x57, 0xAD, 0x30}
+	s.Send(0xFFFF, mysteryBody)
+	log.Printf("[Validation] Sent mystery packet (ID=0xFFFF, body=20 bytes)")
 
-	// Kirim VERSION_ACK langsung
+	// 2. Kirim VERSION_ACK
 	ackData := BuildVersionACK(0, parsed.VersionBytes[:])
 	log.Printf("[Validation] Sending VERSION_ACK (len=%d): %02x", len(ackData), ackData)
 	s.Send(SSMG_VERSION_ACK, ackData)
 
-	// Generate front & back word untuk challenge
+	// 3. Generate front & back word untuk challenge
 	vctx := &ValidationContext{}
 	binary.Read(rand.Reader, binary.BigEndian, &vctx.FrontWord)
 	binary.Read(rand.Reader, binary.BigEndian, &vctx.BackWord)
@@ -108,13 +113,17 @@ func (h *ValidationHandler) OnLogin(s *session.Session, data []byte) error {
 		return nil
 	}
 
-	// Verifikasi SHA1 challenge
-	log.Printf("[Validation] VerifyChallenge: storedMD5=%s, front=%d, back=%d, response=%02x",
-		acc.PasswordHash, vctx.FrontWord, vctx.BackWord, parsed.Password)
-	if !auth.VerifyChallenge(acc.PasswordHash, vctx.FrontWord, vctx.BackWord, parsed.Password) {
-		log.Printf("[Validation] Login gagal: password salah (%s)", parsed.Username)
-		s.Send(SSMG_LOGIN_ACK, BuildLoginACK(LOGIN_BADPASS, 0))
-		return nil
+	// Verifikasi SHA1 challenge (bypass in dev mode)
+	if h.devMode {
+		log.Printf("[Validation] DEV MODE: Password check BYPASSED for %s", parsed.Username)
+	} else {
+		log.Printf("[Validation] VerifyChallenge: storedMD5=%s, front=%d, back=%d, response=%02x",
+			acc.PasswordHash, vctx.FrontWord, vctx.BackWord, parsed.Password)
+		if !auth.VerifyChallenge(acc.PasswordHash, vctx.FrontWord, vctx.BackWord, parsed.Password) {
+			log.Printf("[Validation] Login gagal: password salah (%s)", parsed.Username)
+			s.Send(SSMG_LOGIN_ACK, BuildLoginACK(LOGIN_BADPASS, 0))
+			return nil
+		}
 	}
 
 	// Check banned
@@ -134,13 +143,17 @@ func (h *ValidationHandler) OnLogin(s *session.Session, data []byte) error {
 func (h *ValidationHandler) OnServerletAsk(s *session.Session, data []byte) error {
 	log.Printf("[Validation] OnServerletAsk called - sending server list")
 
-	// Format IP sesuai C# ValidationClient.cs:229-230
-	// "T" prefix + 4 copies of IP separated by comma
-	ip := "127.0.0.1"
-	ipFormat := "T" + ip + "," + ip + "," + ip + "," + ip
+	// Format IP sesuai NekogameECO capture:
+	// "P" prefix + IP:PORT (4 copies separated by comma)
+	ip := "127.0.0.1:12023"
+	ipFormat := "P" + ip + "," + ip + "," + ip + "," + ip
 
 	s.Send(SSMG_SERVER_LST_START, BuildServerListStart())
-	s.Send(SSMG_SERVER_LST_SEND, BuildServerListSend("SagaECO", ipFormat))
+
+	// Kirim 2 server dengan nama ASCII sederhana
+	s.Send(SSMG_SERVER_LST_SEND, BuildServerListSend("Sakura", ipFormat))
+	s.Send(SSMG_SERVER_LST_SEND, BuildServerListSend("TestWorld", ipFormat))
+
 	s.Send(SSMG_SERVER_LST_END, BuildServerListEnd())
 	log.Printf("[Validation] Server list sent")
 	return nil
