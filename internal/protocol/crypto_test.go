@@ -59,14 +59,20 @@ func TestAESNoKeyIsPassthrough(t *testing.T) {
 }
 
 func TestAESPartialTrailingBlock(t *testing.T) {
-	// Sisa < 16 byte: C# tetap men-transform blok pendek apa adanya.
+	// Sisa < 16 byte DIBIARKAN apa adanya (passthrough) — .NET TransformBlock
+	// PaddingMode.None hanya proses blok penuh; round-trip tetap konsisten.
 	c := NewCrypto()
 	c.aesKey = []byte{9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9}
 	src := make([]byte, 4+20) // payload 20 byte = 1 blok 16 + 1 blok 4
 	for i := range src {
 		src[i] = byte(i * 3)
 	}
-	dec := c.Decrypt(c.Encrypt(src, 4), 4)
+	enc := c.Encrypt(src, 4)
+	// 4 byte sisa terakhir (di luar blok penuh) harus = plaintext asli (passthrough).
+	if !bytes.Equal(enc[4+16:], src[4+16:]) {
+		t.Errorf("blok parsial seharusnya passthrough: enc=%v src=%v", enc[4+16:], src[4+16:])
+	}
+	dec := c.Decrypt(enc, 4)
 	if !bytes.Equal(dec, src) {
 		t.Errorf("round-trip blok parsial gagal")
 	}
