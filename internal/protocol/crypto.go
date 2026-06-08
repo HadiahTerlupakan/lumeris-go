@@ -1,6 +1,7 @@
 package protocol
 
 import (
+	"crypto/aes"
 	"math/big"
 )
 
@@ -63,3 +64,46 @@ func (c *Crypto) MakeAESKey(peerKeyExchange []byte) {
 
 // IsReady true bila kunci AES sudah dibuat.
 func (c *Crypto) IsReady() bool { return c.aesKey != nil }
+
+// Encrypt mengenkripsi src mulai dari offset memakai AES-128-ECB tanpa padding,
+// blok-per-blok 16 byte; sisa < 16 byte ditransform apa adanya (replika C#).
+func (c *Crypto) Encrypt(src []byte, offset int) []byte {
+	if c.aesKey == nil || offset >= len(src) {
+		return src
+	}
+	block, err := aes.NewCipher(c.aesKey)
+	if err != nil {
+		return src
+	}
+	out := make([]byte, len(src))
+	copy(out, src)
+	transformECB(block.Encrypt, src, out, offset)
+	return out
+}
+
+// Decrypt kebalikan dari Encrypt.
+func (c *Crypto) Decrypt(src []byte, offset int) []byte {
+	if c.aesKey == nil || offset >= len(src) {
+		return src
+	}
+	block, err := aes.NewCipher(c.aesKey)
+	if err != nil {
+		return src
+	}
+	out := make([]byte, len(src))
+	copy(out, src)
+	transformECB(block.Decrypt, src, out, offset)
+	return out
+}
+
+// transformECB menjalankan fn (Encrypt/Decrypt blok 16-byte) atas src[offset:],
+// menyalin hasil ke out[offset:]. Hanya blok PENUH 16 byte yang ditransform.
+// Sisa < 16 byte dibiarkan apa adanya (passthrough), meniru .NET ICryptoTransform
+// PaddingMode.None yang tidak menulis blok tak-lengkap ke output — sehingga byte
+// sisa tetap sama dengan src (yang sudah disalin ke out). Ini yang membuat
+// round-trip C# bekerja: blok parsial tak pernah ditransform di arah mana pun.
+func transformECB(fn func(dst, src []byte), src, out []byte, offset int) {
+	for i := offset; i+16 <= len(src); i += 16 {
+		fn(out[i:i+16], src[i:i+16])
+	}
+}
