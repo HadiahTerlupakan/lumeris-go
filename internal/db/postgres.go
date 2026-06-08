@@ -27,6 +27,12 @@ func isUniqueViolation(err error) bool {
 	return errors.As(err, &pgErr) && pgErr.Code == "23505"
 }
 
+// isForeignKeyViolation true bila err adalah pelanggaran FK Postgres (SQLSTATE 23503).
+func isForeignKeyViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23503"
+}
+
 func (p *PostgresStore) CreateAccount(ctx context.Context, username, passwordHash string) (*model.Account, error) {
 	acc := &model.Account{Username: username, PasswordHash: passwordHash}
 	err := p.pool.QueryRow(ctx,
@@ -96,6 +102,9 @@ func (p *PostgresStore) CreateCharacter(ctx context.Context, c *model.Character)
 	).Scan(&c.ID)
 	if isUniqueViolation(err) {
 		return ErrDuplicate
+	}
+	if isForeignKeyViolation(err) {
+		return ErrInvalidReference
 	}
 	return err
 }

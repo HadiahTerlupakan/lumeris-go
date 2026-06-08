@@ -15,6 +15,10 @@ var (
 	ErrNotFound = errors.New("db: tidak ditemukan")
 	// ErrDuplicate dikembalikan saat melanggar UNIQUE (username/nama/slot).
 	ErrDuplicate = errors.New("db: duplikat")
+	// ErrInvalidReference dikembalikan saat melanggar foreign key (mis. membuat
+	// karakter untuk account_id yang tak ada). Postgres: SQLSTATE 23503; MemStore
+	// memeriksa keberadaan akun secara eksplisit agar perilakunya setara.
+	ErrInvalidReference = errors.New("db: referensi tak valid")
 )
 
 // Store adalah kontrak persistence lumeris-go. Dua impl: MemStore & PostgresStore.

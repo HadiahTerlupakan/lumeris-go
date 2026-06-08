@@ -95,7 +95,32 @@ func testStore(t *testing.T, s Store) {
 		t.Errorf("SaveCharacter tak tersimpan: %+v", again)
 	}
 
-	// 8. DeleteCharacter → LoadCharacter ErrNotFound.
+	// 8. CreateCharacter dengan account_id tak ada → ErrInvalidReference (FK).
+	orphan := &model.Character{AccountID: 999999, Slot: 0, Name: "Orphan", Job: 1, MapID: 1, HP: 1, MaxHP: 1, SP: 1, MaxSP: 1}
+	if err := s.CreateCharacter(ctx, orphan); !errors.Is(err, ErrInvalidReference) {
+		t.Errorf("CreateCharacter account_id tak ada: err = %v, mau ErrInvalidReference", err)
+	}
+
+	// 9. CharsByAccount terurut menaik berdasar Slot (bukan urutan insert).
+	hi := &model.Character{AccountID: acc.ID, Slot: 5, Name: "Slot5", Job: 1, MapID: 1, HP: 1, MaxHP: 1, SP: 1, MaxSP: 1}
+	lo := &model.Character{AccountID: acc.ID, Slot: 2, Name: "Slot2", Job: 1, MapID: 1, HP: 1, MaxHP: 1, SP: 1, MaxSP: 1}
+	if err := s.CreateCharacter(ctx, hi); err != nil {
+		t.Fatalf("CreateCharacter Slot5: %v", err)
+	}
+	if err := s.CreateCharacter(ctx, lo); err != nil {
+		t.Fatalf("CreateCharacter Slot2: %v", err)
+	}
+	list, err := s.CharsByAccount(ctx, acc.ID)
+	if err != nil {
+		t.Fatalf("CharsByAccount: %v", err)
+	}
+	for i := 1; i < len(list); i++ {
+		if list[i-1].Slot > list[i].Slot {
+			t.Errorf("CharsByAccount tak terurut slot: %v diikuti %v", list[i-1].Slot, list[i].Slot)
+		}
+	}
+
+	// 10. DeleteCharacter → LoadCharacter ErrNotFound.
 	if err := s.DeleteCharacter(ctx, ch.ID); err != nil {
 		t.Fatalf("DeleteCharacter: %v", err)
 	}

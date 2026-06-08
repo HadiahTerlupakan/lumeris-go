@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"sort"
 	"sync"
 
 	"golang.org/x/crypto/bcrypt"
@@ -71,12 +72,18 @@ func (m *MemStore) CharsByAccount(ctx context.Context, accountID int64) ([]*mode
 			out = append(out, cloneCharacter(c))
 		}
 	}
+	// Urut slot agar setara PostgresStore (ORDER BY slot) — iterasi map acak.
+	sort.Slice(out, func(i, j int) bool { return out[i].Slot < out[j].Slot })
 	return out, nil
 }
 
 func (m *MemStore) CreateCharacter(ctx context.Context, c *model.Character) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	// FK: account_id harus menunjuk akun yang ada (setara REFERENCES di Postgres).
+	if _, ok := m.accounts[c.AccountID]; !ok {
+		return ErrInvalidReference
+	}
 	for _, ex := range m.characters {
 		if ex.Name == c.Name {
 			return ErrDuplicate
