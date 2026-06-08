@@ -50,3 +50,29 @@ func DecodeFrame(c *Crypto, frame []byte) ([]SubMessage, error) {
 	}
 	return subs, nil
 }
+
+// EncodeFrame membangun frame wire lengkap dari satu sub-message (ID+data),
+// lalu mengenkripsi region dari offset 8. Layout hasil:
+// [OUTER 4 BE][INNER 4 BE][ region: (len2|ID2|data) + padding-nol-ke-16 ].
+func EncodeFrame(c *Crypto, id uint16, data []byte) []byte {
+	// sub-message: [len 2-byte BE = 2+len(data)][ID 2-byte][data]
+	subLen := 2 + len(data)
+	region := make([]byte, firstLevelLen+subLen)
+	binary.BigEndian.PutUint16(region[0:], uint16(subLen))
+	binary.BigEndian.PutUint16(region[firstLevelLen:], id)
+	copy(region[firstLevelLen+2:], data)
+
+	inner := len(region) // INNER M = panjang sub-message valid (pra-pad)
+
+	// padding ke kelipatan 16 (selalu tambah; mod tak pernah 0) — replika NetIO.cs:684.
+	mod := 16 - (len(region) % 16)
+	region = append(region, make([]byte, mod)...)
+
+	// frame: 8 byte header + region
+	frame := make([]byte, 8+len(region))
+	copy(frame[8:], region)
+	binary.BigEndian.PutUint32(frame[4:], uint32(inner))       // INNER M
+	binary.BigEndian.PutUint32(frame[0:], uint32(len(region))) // OUTER N = len region (pasca-pad)
+
+	return c.Encrypt(frame, 8)
+}
