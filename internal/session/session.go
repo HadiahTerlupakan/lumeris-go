@@ -1,0 +1,90 @@
+package session
+
+import (
+	"net"
+	"sync"
+
+	"lumeris-go/internal/protocol"
+)
+
+// HandlerFunc menangani satu sub-message inbound (ID sudah dipetakan ke handler).
+type HandlerFunc func(s *Session, data []byte) error
+
+// Session = satu koneksi klien: kripto, dispatch opcode, dan antrian tulis.
+type Session struct {
+	conn      net.Conn
+	crypto    *protocol.Crypto
+	dispatch  map[uint16]HandlerFunc
+	outbound  chan []byte
+	done      chan struct{}
+	closeOnce sync.Once
+}
+
+// New membuat Session siap-jalan (kripto baru, belum handshake).
+func New(conn net.Conn, dispatch map[uint16]HandlerFunc) *Session {
+	return &Session{
+		conn:     conn,
+		crypto:   protocol.NewCrypto(),
+		dispatch: dispatch,
+		outbound: make(chan []byte, 64),
+		done:     make(chan struct{}),
+	}
+}
+
+// Run menjalankan handshake server lalu writer goroutine + read-loop (blocking).
+// Mengembalikan error penyebab koneksi berakhir (handshake gagal / EOF / dll).
+func (s *Session) Run() error {
+	if err := serverHandshake(s.conn, s.crypto); err != nil {
+		s.Close()
+		return err
+	}
+	go s.writeLoop()
+	return s.readLoop()
+}
+
+func (s *Session) readLoop() error {
+	for {
+		subs, err := ReadFrame(s.conn, s.crypto)
+		if err != nil {
+			s.Close()
+			return err
+		}
+		for _, sub := range subs {
+			if h := s.dispatch[sub.ID]; h != nil {
+				_ = h(s, sub.Data) // error handler tidak memutus koneksi (milestone)
+			}
+		}
+	}
+}
+
+func (s *Session) writeLoop() {
+	for {
+		select {
+		case <-s.done:
+			return
+		case b := <-s.outbound:
+			if _, err := s.conn.Write(b); err != nil {
+				s.Close()
+				return
+			}
+		}
+	}
+}
+
+// Send meng-encode (ID, data) jadi frame wire dan mengantri untuk ditulis.
+// Aman dipanggil dari banyak goroutine; tak memblok bila session sudah ditutup.
+func (s *Session) Send(id uint16, data []byte) {
+	frame := protocol.EncodeFrame(s.crypto, id, data)
+	select {
+	case s.outbound <- frame:
+	case <-s.done:
+	}
+}
+
+// Close menutup koneksi & menghentikan loop; idempoten.
+func (s *Session) Close() {
+	s.closeOnce.Do(func() {
+		close(s.done)
+		_ = s.conn.Close()
+	})
+}
