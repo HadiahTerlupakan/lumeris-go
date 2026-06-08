@@ -107,3 +107,18 @@ func testStore(t *testing.T, s Store) {
 func TestMemStoreContract(t *testing.T) {
 	testStore(t, NewMemStore())
 }
+
+func TestPostgresStoreContract(t *testing.T) {
+	pool := testPool(t) // skip bila LUMERIS_TEST_DSN kosong
+	ctx := context.Background()
+
+	// Skema bersih + migrasi sebelum contract test.
+	if _, err := pool.Exec(ctx, `DROP TABLE IF EXISTS characters, accounts, schema_migrations CASCADE`); err != nil {
+		t.Fatalf("bersihkan skema: %v", err)
+	}
+	if err := RunMigrations(ctx, pool, MigrationsFS); err != nil {
+		t.Fatalf("migrasi: %v", err)
+	}
+
+	testStore(t, NewPostgresStore(pool))
+}
