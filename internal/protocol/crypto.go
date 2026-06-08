@@ -3,8 +3,10 @@ package protocol
 import (
 	"crypto/aes"
 	"crypto/rand"
+	"encoding/binary"
 	"encoding/hex"
 	"math/big"
+	"strings"
 )
 
 // modulusHex adalah modulus DH 128-byte (replika persis Encryption.Module di C#).
@@ -150,4 +152,31 @@ func transformECB(fn func(dst, src []byte), src, out []byte, offset int) {
 	for i := offset; i+16 <= len(src); i += 16 {
 		fn(out[i:i+16], src[i:i+16])
 	}
+}
+
+// BuildServerHandshake membangun blob 529-byte handshake DH server (plaintext),
+// replika NetIO.cs:242-251. Panggil SETELAH MakePrivateKey.
+// Layout: [0..3]=0, [4..7]=BE 1, [8]=0x32, [9..12]=BE 0x100,
+// [13..268]=modulus hex LOWERCASE (256), [269..272]=BE 0x100,
+// [273..528]=pubkey server hex UPPERCASE (256).
+func (c *Crypto) BuildServerHandshake() []byte {
+	blob := make([]byte, 529)
+	binary.BigEndian.PutUint32(blob[4:], 1)
+	blob[8] = 0x32
+	binary.BigEndian.PutUint32(blob[9:], 0x100)
+	modHex := strings.ToLower(hexEncode(c.modulus.Bytes()))
+	copy(blob[13:], []byte(padHexLeft(modHex, 256)))
+	binary.BigEndian.PutUint32(blob[269:], 0x100)
+	pubHex := strings.ToUpper(hexEncode(c.GetKeyExchangeBytes()))
+	copy(blob[273:], []byte(padHexLeft(pubHex, 256)))
+	return blob
+}
+
+// padHexLeft memastikan string hex berukuran tepat n char dengan menambah '0' di kiri
+// (modulus & pubkey selalu 128 byte = 256 char; guard bila ada leading-zero hilang).
+func padHexLeft(s string, n int) string {
+	if len(s) >= n {
+		return s[len(s)-n:]
+	}
+	return strings.Repeat("0", n-len(s)) + s
 }

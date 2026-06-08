@@ -129,3 +129,45 @@ func TestDHSharedKeyMatchesBothSides(t *testing.T) {
 		}
 	}
 }
+
+func TestBuildServerHandshake529(t *testing.T) {
+	c := NewCrypto()
+	c.MakePrivateKey()
+
+	blob := c.BuildServerHandshake()
+	if len(blob) != 529 {
+		t.Fatalf("blob = %d byte, mau 529", len(blob))
+	}
+	// [4..7] = BE 1
+	if blob[4] != 0 || blob[5] != 0 || blob[6] != 0 || blob[7] != 1 {
+		t.Errorf("byte 4-7 = %v, mau 00 00 00 01", blob[4:8])
+	}
+	// [8] = 0x32
+	if blob[8] != 0x32 {
+		t.Errorf("byte 8 = %#x, mau 0x32", blob[8])
+	}
+	// [9..12] = BE 0x100
+	if blob[9] != 0 || blob[10] != 0 || blob[11] != 1 || blob[12] != 0 {
+		t.Errorf("byte 9-12 = %v, mau 00 00 01 00", blob[9:13])
+	}
+	// [13..268] = modulus hex LOWERCASE (256 char). Cek prefix modulus.
+	modHexLower := []byte("f488fd584e49dbcd")
+	if !bytes.Equal(blob[13:13+len(modHexLower)], modHexLower) {
+		t.Errorf("modulus hex (lowercase) salah: %s", blob[13:13+16])
+	}
+	// [269..272] = BE 0x100
+	if blob[269] != 0 || blob[270] != 0 || blob[271] != 1 || blob[272] != 0 {
+		t.Errorf("byte 269-272 = %v, mau 00 00 01 00", blob[269:273])
+	}
+	// [273..528] = pubkey hex UPPERCASE (256 char) — harus uppercase, panjang 256.
+	pub := blob[273:529]
+	if len(pub) != 256 {
+		t.Errorf("pubkey hex len = %d, mau 256", len(pub))
+	}
+	for _, ch := range pub {
+		if ch >= 'a' && ch <= 'f' {
+			t.Errorf("pubkey hex mengandung huruf kecil (harus uppercase): %s", pub)
+			break
+		}
+	}
+}
