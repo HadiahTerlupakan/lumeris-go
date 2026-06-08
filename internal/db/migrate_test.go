@@ -38,12 +38,12 @@ func TestRunMigrationsIdempotent(t *testing.T) {
 		t.Fatalf("RunMigrations (2, idempoten): %v", err)
 	}
 
-	// Verifikasi tabel ada & versi tercatat.
+	// Verifikasi tabel ada & versi tercatat (sekarang ada 2 migrasi: 001_init + 002_extend).
 	var n int
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM schema_migrations`).Scan(&n); err != nil {
 		t.Fatalf("query schema_migrations: %v", err)
 	}
-	if n != 1 {
-		t.Errorf("schema_migrations punya %d baris, mau 1", n)
+	if n != 2 {
+		t.Errorf("schema_migrations punya %d baris, mau 2", n)
 	}
 }

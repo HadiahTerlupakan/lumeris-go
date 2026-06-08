@@ -22,7 +22,7 @@ func main() {
 
 	// Load config dari environment
 	cfg := config.Load()
-	log.Printf("Config loaded: ListenValidation=%s, ListenLogin=%s, PortHTTP=%d",
+	log.Printf("Config loaded: ListenValidation=%s, ListenLogin=%s, PortHTTP=%s",
 		cfg.ListenValidation, cfg.ListenLogin, cfg.PortHTTP)
 
 	// Connect ke PostgreSQL
