@@ -24,11 +24,9 @@ func ReadFrame(r io.Reader, c *protocol.Crypto) ([]protocol.SubMessage, error) {
 	if n == 0 || n > maxRegion {
 		return nil, fmt.Errorf("OUTER length %d di luar batas (1..%d)", n, maxRegion)
 	}
-	rest := make([]byte, int(n)+4) // [INNER 4][region n]
-	if _, err := io.ReadFull(r, rest); err != nil {
+	frame := make([]byte, 8+int(n)) // [0000][INNER 4][region n]; OUTER slot [0:4] tetap nol
+	if _, err := io.ReadFull(r, frame[4:]); err != nil {
 		return nil, err
 	}
-	frame := make([]byte, 8+int(n))
-	copy(frame[4:], rest) // frame[0:4]=0 (OUTER diabaikan DecodeFrame)
 	return protocol.DecodeFrame(c, frame)
 }
