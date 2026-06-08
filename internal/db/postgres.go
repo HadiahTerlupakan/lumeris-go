@@ -37,7 +37,7 @@ func isForeignKeyViolation(err error) bool {
 func (p *PostgresStore) CreateAccount(ctx context.Context, username, passwordHash string) (*model.Account, error) {
 	acc := &model.Account{Username: username, PasswordHash: passwordHash, DeletePass: "0000"}
 	err := p.pool.QueryRow(ctx,
-		`INSERT INTO accounts(username, password_hash, deletepass) VALUES($1,$2,$3) RETURNING id, gm_level, banned`,
+		`INSERT INTO login(username, password, deletepass) VALUES($1,$2,$3) RETURNING account_id, gmlevel, banned`,
 		username, passwordHash, acc.DeletePass,
 	).Scan(&acc.ID, &acc.GMLevel, &acc.Banned)
 	if isUniqueViolation(err) {
@@ -52,7 +52,7 @@ func (p *PostgresStore) CreateAccount(ctx context.Context, username, passwordHas
 func (p *PostgresStore) GetAccountByName(ctx context.Context, username string) (*model.Account, error) {
 	acc := &model.Account{Username: username}
 	err := p.pool.QueryRow(ctx,
-		`SELECT id, password_hash, deletepass, gm_level, banned FROM accounts WHERE username=$1`,
+		`SELECT account_id, password, deletepass, gmlevel, banned FROM login WHERE username=$1`,
 		username,
 	).Scan(&acc.ID, &acc.PasswordHash, &acc.DeletePass, &acc.GMLevel, &acc.Banned)
 	if errors.Is(err, pgx.ErrNoRows) {
