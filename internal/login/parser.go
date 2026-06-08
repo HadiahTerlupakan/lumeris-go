@@ -28,11 +28,11 @@ type ParsedLogin struct {
 }
 
 // ParseLogin mem-parse CSMG_LOGIN packet.
-// Layout (byte-exact, ASIMETRI off++ WAJIB):
-// off=0: uLen(byte), user(ASCII uLen-1), off+=uLen
-// THEN off++ (gap 1 byte)
-// pLen(byte), pass(20 byte SHA1), off+=pLen
-// MAC: ushort@off + uint@(off+2) = 6 byte
+// Layout (byte-exact):
+// uLen(byte), username(ASCII uLen-1), null(1),
+// pLen(byte), password(hex ASCII pLen-1), null(1),
+// MAC(6 bytes)
+// CATATAN: Password adalah 40-char hex string (SHA1 sebagai hex), bukan raw 20 bytes!
 func ParseLogin(data []byte) (*ParsedLogin, error) {
 	if len(data) < 4 {
 		return nil, fmt.Errorf("LOGIN terlalu pendek: %d bytes", len(data))
@@ -45,12 +45,9 @@ func ParseLogin(data []byte) (*ParsedLogin, error) {
 		return nil, fmt.Errorf("LOGIN username overflow")
 	}
 	username := string(data[offset : offset+uLen-1]) // -1: exclude null terminator
-	offset += uLen
+	offset += uLen // uLen includes the null
 
-	// ASIMETRI: off++ sebelum pLen
-	offset++
-
-	// Password
+	// Password (NO GAP!)
 	if offset >= len(data) {
 		return nil, fmt.Errorf("LOGIN password missing")
 	}
@@ -59,22 +56,24 @@ func ParseLogin(data []byte) (*ParsedLogin, error) {
 	if offset+pLen > len(data) {
 		return nil, fmt.Errorf("LOGIN password overflow")
 	}
-	password := make([]byte, pLen-1) // -1: exclude null terminator (tapi password SHA1 = raw 20 byte, no null)
-	copy(password, data[offset:offset+pLen-1])
-	offset += pLen
+	// Password adalah hex string ASCII (40 chars untuk SHA1), convert ke raw bytes
+	passwordHex := string(data[offset : offset+pLen-1]) // -1: exclude null
+	password := make([]byte, len(passwordHex)/2)
+	for i := 0; i < len(passwordHex); i += 2 {
+		fmt.Sscanf(passwordHex[i:i+2], "%02x", &password[i/2])
+	}
+	offset += pLen // pLen includes the null
 
 	// MAC (6 byte: ushort + uint)
 	if offset+6 > len(data) {
 		return nil, fmt.Errorf("LOGIN MAC missing")
 	}
 	mac := make([]byte, 6)
-	// MAC layout: [ushort BE@offset][uint BE@offset+2]
-	copy(mac[0:2], data[offset:offset+2])
-	copy(mac[2:6], data[offset+2:offset+6])
+	copy(mac, data[offset:offset+6])
 
 	return &ParsedLogin{
 		Username: username,
-		Password: password,
+		Password: password, // Now 20 bytes raw SHA1
 		MAC:      mac,
 	}, nil
 }

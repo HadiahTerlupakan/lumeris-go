@@ -25,12 +25,18 @@ func serverHandshake(conn net.Conn, c *protocol.Crypto) error {
 		return err
 	}
 	c.MakePrivateKey()
-	if _, err := conn.Write(c.BuildServerHandshake()); err != nil {
+	blob := c.BuildServerHandshake()
+	if _, err := conn.Write(blob); err != nil {
 		return err
 	}
 	reply := make([]byte, replyLen)
 	if _, err := io.ReadFull(conn, reply); err != nil {
 		return err
+	}
+	// Verifikasi reply prefix
+	prefix := binary.BigEndian.Uint32(reply[0:4])
+	if prefix != 0x100 {
+		return errors.New("serverHandshake: reply prefix bukan 0x100")
 	}
 	c.MakeAESKeyHex(string(reply[4:replyLen])) // reply[4:260] = 256 char hex pubkey klien
 	if !c.IsReady() {

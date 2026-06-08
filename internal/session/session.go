@@ -1,6 +1,7 @@
 package session
 
 import (
+	"log"
 	"net"
 	"sync"
 
@@ -55,6 +56,9 @@ func (s *Session) readLoop() error {
 		for _, sub := range subs {
 			if h := s.dispatch[sub.ID]; h != nil {
 				_ = h(s, sub.Data) // error handler tidak memutus koneksi (milestone)
+			} else {
+				// Log packet yang tidak dikenali
+				log.Printf("[Session] Unhandled packet: ID=0x%04X, len=%d, data=%02x", sub.ID, len(sub.Data), sub.Data)
 			}
 		}
 	}
@@ -80,6 +84,15 @@ func (s *Session) Send(id uint16, data []byte) {
 	frame := protocol.EncodeFrame(s.crypto, id, data)
 	select {
 	case s.outbound <- frame:
+	case <-s.done:
+	}
+}
+
+// SendRaw mengirim raw bytes langsung tanpa encryption/framing.
+// Digunakan untuk packet khusus seperti mystery packet di ValidationClient.cs:191-195.
+func (s *Session) SendRaw(raw []byte) {
+	select {
+	case s.outbound <- raw:
 	case <-s.done:
 	}
 }

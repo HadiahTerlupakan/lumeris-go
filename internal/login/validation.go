@@ -36,6 +36,7 @@ func (h *ValidationHandler) Dispatch() map[uint16]session.HandlerFunc {
 		CSMG_LOGIN:         h.OnLogin,
 		CSMG_SERVERLET_ASK: h.OnServerletAsk,
 		CSMG_PING:          h.OnPing,
+		0x002F:             h.OnUnknown002F, // Unknown packet after login
 	}
 }
 
@@ -47,17 +48,27 @@ func (h *ValidationHandler) OnSendVersion(s *session.Session, data []byte) error
 		return err
 	}
 
-	// Milestone: terima versi apa saja
-	s.Send(SSMG_VERSION_ACK, BuildVersionACK(0, parsed.VersionBytes[:]))
+	log.Printf("[Validation] Client version bytes: %02x", parsed.VersionBytes)
 
-	// Generate front & back word
+	// HAPUS mystery packet - NekogameECO TIDAK mengirim ini!
+	// Dari proxy capture, flow langsung: VERSION_ACK → LOGIN_ALLOWED
+	// Client tidak expect mystery packet 0xFFFF
+
+	// Kirim VERSION_ACK langsung
+	ackData := BuildVersionACK(0, parsed.VersionBytes[:])
+	log.Printf("[Validation] Sending VERSION_ACK (len=%d): %02x", len(ackData), ackData)
+	s.Send(SSMG_VERSION_ACK, ackData)
+
+	// Generate front & back word untuk challenge
 	vctx := &ValidationContext{}
 	binary.Read(rand.Reader, binary.BigEndian, &vctx.FrontWord)
 	binary.Read(rand.Reader, binary.BigEndian, &vctx.BackWord)
 	s.Context = vctx
 
-	s.Send(SSMG_LOGIN_ALLOWED, BuildLoginAllowed(vctx.FrontWord, vctx.BackWord))
-	s.Send(SSMG_REQUEST_NYA, BuildRequestNya())
+	allowedPacket := BuildLoginAllowed(vctx.FrontWord, vctx.BackWord)
+	log.Printf("[Validation] LOGIN_ALLOWED packet body (%d bytes): %02x", len(allowedPacket), allowedPacket)
+	s.Send(SSMG_LOGIN_ALLOWED, allowedPacket)
+	// NOTE: C# TIDAK mengirim REQUEST_NYA setelah LOGIN_ALLOWED!
 
 	log.Printf("[Validation] Version OK, challenge sent (front=%08x, back=%08x)", vctx.FrontWord, vctx.BackWord)
 	return nil
@@ -65,6 +76,8 @@ func (h *ValidationHandler) OnSendVersion(s *session.Session, data []byte) error
 
 // OnLogin menangani CSMG_LOGIN di fase Validation: verifikasi SHA1 challenge.
 func (h *ValidationHandler) OnLogin(s *session.Session, data []byte) error {
+	log.Printf("[Validation] OnLogin received %d bytes: %02x", len(data), data)
+
 	parsed, err := ParseLogin(data)
 	if err != nil {
 		log.Printf("[Validation] ParseLogin error: %v", err)
@@ -77,6 +90,10 @@ func (h *ValidationHandler) OnLogin(s *session.Session, data []byte) error {
 		s.Send(SSMG_LOGIN_ACK, BuildLoginACK(LOGIN_UNKNOWN_ACC, 0))
 		return nil
 	}
+
+	// IMPORTANT: Kirim LOGIN_ACK OK dulu (line 53-55 ValidationClient.cs)
+	// Ini TCP handshake flag, bukan final result
+	s.Send(SSMG_LOGIN_ACK, BuildLoginACK(LOGIN_OK, 0))
 
 	// Fetch account
 	acc, err := h.store.GetAccountByName(context.Background(), parsed.Username)
@@ -92,6 +109,8 @@ func (h *ValidationHandler) OnLogin(s *session.Session, data []byte) error {
 	}
 
 	// Verifikasi SHA1 challenge
+	log.Printf("[Validation] VerifyChallenge: storedMD5=%s, front=%d, back=%d, response=%02x",
+		acc.PasswordHash, vctx.FrontWord, vctx.BackWord, parsed.Password)
 	if !auth.VerifyChallenge(acc.PasswordHash, vctx.FrontWord, vctx.BackWord, parsed.Password) {
 		log.Printf("[Validation] Login gagal: password salah (%s)", parsed.Username)
 		s.Send(SSMG_LOGIN_ACK, BuildLoginACK(LOGIN_BADPASS, 0))
@@ -105,18 +124,23 @@ func (h *ValidationHandler) OnLogin(s *session.Session, data []byte) error {
 		return nil
 	}
 
-	// Login berhasil
+	// Login berhasil - tidak perlu kirim LOGIN_ACK lagi karena sudah dikirim di awal
 	vctx.Account = acc
-	s.Send(SSMG_LOGIN_ACK, BuildLoginACK(LOGIN_OK, uint32(acc.ID)))
 	log.Printf("[Validation] Login berhasil: %s (ID=%d)", acc.Username, acc.ID)
 	return nil
 }
 
 // OnServerletAsk menangani CSMG_SERVERLET_ASK: kirim daftar server (LOGIN server).
 func (h *ValidationHandler) OnServerletAsk(s *session.Session, data []byte) error {
-	// Milestone: hardcode satu server "SagaECO" -> IP dari env (nanti via config)
+	log.Printf("[Validation] OnServerletAsk called - sending server list")
+
+	// Format IP sesuai C# ValidationClient.cs:229-230
+	// "T" prefix + 4 copies of IP separated by comma
+	ip := "127.0.0.1"
+	ipFormat := "T" + ip + "," + ip + "," + ip + "," + ip
+
 	s.Send(SSMG_SERVER_LST_START, BuildServerListStart())
-	s.Send(SSMG_SERVER_LST_SEND, BuildServerListSend("SagaECO", "127.0.0.1")) // TODO: dari config
+	s.Send(SSMG_SERVER_LST_SEND, BuildServerListSend("SagaECO", ipFormat))
 	s.Send(SSMG_SERVER_LST_END, BuildServerListEnd())
 	log.Printf("[Validation] Server list sent")
 	return nil
@@ -125,5 +149,14 @@ func (h *ValidationHandler) OnServerletAsk(s *session.Session, data []byte) erro
 // OnPing menangani CSMG_PING: balas PONG.
 func (h *ValidationHandler) OnPing(s *session.Session, data []byte) error {
 	s.Send(SSMG_PONG, BuildPong())
+	return nil
+}
+
+// OnUnknown002F menangani packet 0x002F (unknown packet setelah login).
+// Dari capture NekogameECO: Client kirim 0x002F, server balas 0x0030 (6 bytes: 00 30 00 00 00 00)
+func (h *ValidationHandler) OnUnknown002F(s *session.Session, data []byte) error {
+	log.Printf("[Validation] Received 0x002F (%d bytes), sending 0x0030 response", len(data))
+	// Response 0x0030: 6 bytes nol (dari capture: 00 30 00 00 00 00, tapi ID sudah otomatis jadi body = 00 00 00 00)
+	s.Send(0x0030, make([]byte, 4)) // 4 bytes body (nol semua)
 	return nil
 }

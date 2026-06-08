@@ -1,0 +1,137 @@
+╔══════════════════════════════════════════════════════════════════════════════╗
+║                   LUMERIS-GO PACKET FLOW FIXES (2026-06-08)                 ║
+║              Berdasarkan Proxy Capture dari NekogameECO Server              ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+
+📋 RINGKASAN MASALAH & SOLUSI
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+✅ FIXED #1: Hapus Mystery Packet 0xFFFF
+   Problem: Go server mengirim mystery packet yang TIDAK ADA di NekogameECO
+   Solution: Removed mystery packet dari validation.go line 60-66
+   File: internal/login/validation.go
+
+✅ FIXED #2: Tambah Handler 0x002F & Response 0x0030  
+   Problem: Client kirim 0x002F setelah login, server tidak respond
+   Solution: Added OnUnknown002F() handler, balas dengan 0x0030 (4 bytes nol)
+   File: internal/login/validation.go line 155-162
+
+✅ FIXED #3: Map Server SSMG_LOGIN_ALLOWED opcode salah
+   Problem: SSMG_LOGIN_ALLOWED = 0x0011 (SALAH!)
+   Solution: Changed to 0x000F (sesuai capture)
+   File: internal/mapserver/opcodes.go line 14
+
+✅ FIXED #4: Map Server SSMG_LOGIN_ACK opcode salah
+   Problem: SSMG_LOGIN_ACK = 0x0012 (SALAH!)
+   Solution: Changed to 0x0011 (sesuai capture)
+   File: internal/mapserver/opcodes.go line 15
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+📊 VALIDATION SERVER FLOW (FIXED)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Port: 12022
+
+1. C->S 0x0001 CSMG_SEND_VERSION (6 byte version)
+2. S->C 0x0002 SSMG_VERSION_ACK (8 bytes: result + version echo)
+3. S->C 0x001E SSMG_LOGIN_ALLOWED (8 bytes: FrontWord + BackWord challenge)
+4. C->S 0x001F CSMG_LOGIN (username + SHA1(front+md5+back) + MAC)
+5. S->C 0x0020 SSMG_LOGIN_ACK (19 bytes: result + accountID + timestamps)
+6. C->S 0x002F Unknown packet (2 bytes) ← NEW!
+7. S->C 0x0030 Response (6 bytes total: ID=0x0030 + 4 bytes body) ← NEW!
+8. C->S 0x0031 CSMG_SERVERLET_ASK (request server list)
+9. S->C 0x0032 SSMG_SERVER_LST_START
+10. S->C 0x0033 SSMG_SERVER_LST_SEND (server name + IP format)
+11. S->C 0x0034 SSMG_SERVER_LST_END
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+📊 LOGIN SERVER FLOW (Unchanged)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Port: 12023
+
+1. C->S 0x0001 CSMG_SEND_VERSION
+2. S->C 0x0002 SSMG_VERSION_ACK
+3. C->S 0x002A CSMG_CHAR_STATUS (request character list)
+4. S->C 0x0028 SSMG_CHAR_DATA (131 bytes per char)
+5. S->C 0x0029 SSMG_CHAR_EQUIP (230 bytes per char)
+6. C->S 0x00A7 CSMG_CHAR_SELECT (pilih slot)
+7. S->C 0x00A8 SSMG_CHAR_SELECT_ACK (mapID)
+8. C->S 0x0032 CSMG_REQUEST_MAP_SERVER (minta Map server IP)
+9. S->C 0x0033 SSMG_SEND_TO_MAP_SERVER (serverID + IP + port)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+📊 MAP SERVER FLOW (FIXED)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Port: 12024
+
+1. C->S 0x000A CSMG_SEND_VERSION
+2. S->C 0x000B SSMG_VERSION_ACK
+3. S->C 0x000F SSMG_LOGIN_ALLOWED ← FIXED from 0x0011!
+4. C->S 0x0010 CSMG_LOGIN
+5. S->C 0x0011 SSMG_LOGIN_ACK ← FIXED from 0x0012!
+6. C->S 0x01FD CSMG_CHAR_SLOT (pilih slot karakter)
+7. S->C ... (spawn sequence: belum diimplementasi)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+🔍 DISCOVERIES FROM NEKOGAME CAPTURE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+❌ Mystery Packet 0xFFFF (C# SagaECO quirk)
+   • C# server mengirim mystery packet 0xFFFF (20 bytes)
+   • NekogameECO TIDAK mengirim ini sama sekali
+   • Kesimpulan: Bukan bagian dari protokol ECO asli, removed dari Go
+
+✅ Packet 0x002F & 0x0030 (Undocumented flow)
+   • Setelah LOGIN_ACK, client kirim 0x002F
+   • Server harus balas 0x0030 (4 bytes body = nol semua)
+   • Fungsi belum diketahui (mungkin session confirmation)
+
+✅ Map Server Opcode Mapping
+   • SSMG_LOGIN_ALLOWED adalah 0x000F (bukan 0x0011)
+   • SSMG_LOGIN_ACK adalah 0x0011 (bukan 0x0012)
+   • Confirmed dengan byte-exact match dari capture
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+✅ BUILD & TEST STATUS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+✅ Build: SUCCESS (go build -o lumeris-go.exe)
+✅ Validation Server: LISTENING on port 12022
+✅ Login Server: LISTENING on port 12023
+✅ Map Server: LISTENING on port 12024
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+📝 NEXT STEPS (Pending Implementation)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+1. Test dengan ECO client lokal (eco.exe)
+2. Verify 0x002F → 0x0030 exchange works
+3. Implement Map Server spawn sequence:
+   - GOLEM_ACTOR_APPEAR (NPC spawning)
+   - ACTOR_PC_APPEAR (player appearance)
+   - PLAYER_MOVE (movement packets)
+   - CHAT messages
+4. Fix server list IP format (T → P prefix bila perlu)
+5. Implement inventory/equipment loading
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+📚 REFERENCE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Proxy Capture: proxy_packets.log (150 lines, 88+ seconds of gameplay)
+Validation Phase: 26829ms - 27103ms
+Login Phase: 50543ms - 50761ms
+Map Entry: 87878ms - 88018ms
+
+Reference Server: NekogameECO (161.117.42.60:12000)
+Character Used: "Larazeta" (Level 1 Novice)
+

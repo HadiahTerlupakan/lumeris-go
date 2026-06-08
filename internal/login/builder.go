@@ -7,20 +7,26 @@ import (
 // BuildVersionACK membuat SSMG_VERSION_ACK packet.
 // result: 0 = OK, 0xFFFF = version mismatch
 // versionBytes: 6 byte version info dari klien (echo back)
-// Layout: result uint16@offset2, version 6 bytes@offset4
+// Layout byte-exact: result uint16@0-1, version 6 bytes@2-7 (total 8 bytes body)
 func BuildVersionACK(result uint16, versionBytes []byte) []byte {
-	buf := make([]byte, 10)
-	putUint16BE(buf, 2, result)  // result di offset 2, bukan 0!
+	buf := make([]byte, 8)
+	// Offset 0-1: result
+	putUint16BE(buf, 0, result)
+	// Offset 2-7: version bytes (6 byte)
 	if len(versionBytes) >= 6 {
-		copy(buf[4:10], versionBytes[:6])
+		copy(buf[2:8], versionBytes[:6])
 	}
 	return buf
 }
 
 // BuildLoginAllowed membuat SSMG_LOGIN_ALLOWED packet dengan front/back challenge words.
+// PENTING: Client membaca dari offset 0 dan 4 (BUKAN 2 dan 6 seperti C# server!)
+// C# server kirim dengan padding, tapi client ignore padding dan baca dari awal.
 func BuildLoginAllowed(front, back uint32) []byte {
 	buf := make([]byte, 8)
+	// Offset 0: FrontWord
 	putUint32BE(buf, 0, front)
+	// Offset 4: BackWord
 	putUint32BE(buf, 4, back)
 	return buf
 }
@@ -28,11 +34,16 @@ func BuildLoginAllowed(front, back uint32) []byte {
 // BuildLoginACK membuat SSMG_LOGIN_ACK packet.
 // result: LOGIN_OK / LOGIN_UNKNOWN_ACC / LOGIN_BADPASS / LOGIN_BFALOCK / LOGIN_ALREADY / LOGIN_IPBLOCK
 // accountID: ID akun yang login (0 bila gagal)
+// Layout byte-exact sesuai C# SSMG_LOGIN_ACK.cs:
+// 2 byte padding@0-1, result uint32@2, accountID uint32@6, RestTestTime uint32@10, TestEndTime uint32@14 (total 19 bytes)
 func BuildLoginACK(result, accountID uint32) []byte {
-	buf := make([]byte, 16)
-	putUint32BE(buf, 0, result)
-	putUint32BE(buf, 4, accountID)
-	// RestTestTime@8 dan TestEndTime@12 default 0 (milestone)
+	buf := make([]byte, 19)
+	// Offset 2: Result
+	putUint32BE(buf, 2, result)
+	// Offset 6: AccountID
+	putUint32BE(buf, 6, accountID)
+	// Offset 10: RestTestTime (default 0)
+	// Offset 14: TestEndTime (default 0)
 	return buf
 }
 
@@ -47,24 +58,44 @@ func BuildServerListStart() []byte {
 }
 
 // BuildServerListSend membuat SSMG_SERVER_LST_SEND packet.
-// name: nama server (UTF-8), ip: IP server (UTF-8)
+// C# structure (SSMG_SERVER_LST_SEND.cs):
+// - Offset 0-1: padding (initial 4 bytes, offset=2)
+// - Offset 2: nameLen (including \0)
+// - Offset 3+: name bytes + \0
+// - Offset (3+nameLen): ipLen (including \0)
+// - Offset (3+nameLen+1): ip bytes + \0
 func BuildServerListSend(name, ip string) []byte {
 	nameBytes := []byte(name)
 	ipBytes := []byte(ip)
-	// Layout: nameLen(1) + name + \0 + ipLen(1) + ip + \0
-	buf := make([]byte, 1+len(nameBytes)+1+1+len(ipBytes)+1)
-	offset := 0
-	buf[offset] = byte(len(nameBytes) + 1) // +1 untuk \0
+
+	nameLen := len(nameBytes) + 1 // +1 untuk \0
+	ipLen := len(ipBytes) + 1     // +1 untuk \0
+
+	// Total: 2 (padding) + 1 (nameLen) + nameLen + 1 (ipLen) + ipLen
+	totalLen := 2 + 1 + nameLen + 1 + ipLen
+	buf := make([]byte, totalLen)
+
+	offset := 2 // Start at offset 2 (skip padding)
+
+	// Name length at offset 2
+	buf[offset] = byte(nameLen)
 	offset++
+
+	// Name bytes + \0 at offset 3
 	copy(buf[offset:], nameBytes)
 	offset += len(nameBytes)
 	buf[offset] = 0 // \0
 	offset++
-	buf[offset] = byte(len(ipBytes) + 1) // +1 untuk \0
+
+	// IP length at offset (3 + nameLen)
+	buf[offset] = byte(ipLen)
 	offset++
+
+	// IP bytes + \0
 	copy(buf[offset:], ipBytes)
 	offset += len(ipBytes)
 	buf[offset] = 0 // \0
+
 	return buf
 }
 

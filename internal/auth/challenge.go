@@ -4,8 +4,10 @@ package auth
 import (
 	"crypto/md5"
 	"crypto/sha1"
-	"encoding/binary"
 	"encoding/hex"
+	"fmt"
+	"log"
+	"strings"
 )
 
 // MD5Hex menghitung MD5 hash dari plaintext dan mengembalikan hex lowercase.
@@ -16,8 +18,8 @@ func MD5Hex(plaintext string) string {
 }
 
 // VerifyChallenge memverifikasi response SHA1 challenge dari klien ECO.
-// Klien mengirim: SHA1(front + storedMD5 + back) dimana front & back adalah
-// dua uint32 random yang dikirim server via LOGIN_ALLOWED packet.
+// Format sesuai MySQLAccountDB.CheckPassword (line 247-248):
+// SHA1(frontword_decimal_string + password_lowercase + backword_decimal_string)
 //
 // storedMD5Hex: MD5 hash password tersimpan di DB (32 char hex lowercase)
 // front, back: dua uint32 random yang dikirim ke klien
@@ -28,13 +30,18 @@ func VerifyChallenge(storedMD5Hex string, front, back uint32, response []byte) b
 	if len(response) != 20 {
 		return false
 	}
-	// Bentuk buffer: [front 4 bytes BE] + [MD5 hex 32 bytes ASCII] + [back 4 bytes BE]
-	buf := make([]byte, 4+32+4)
-	binary.BigEndian.PutUint32(buf[0:4], front)
-	copy(buf[4:36], []byte(storedMD5Hex))
-	binary.BigEndian.PutUint32(buf[36:40], back)
 
-	expected := sha1.Sum(buf)
+	// Format: "frontword" + "password_lowercase" + "backword" (as ASCII decimal strings)
+	// Contoh: "1234567890" + "851fdee206c1eec10cee5ec8e8962af2" + "9876543210"
+	str := fmt.Sprintf("%d%s%d", front, strings.ToLower(storedMD5Hex), back)
+	expected := sha1.Sum([]byte(str))
+
+	// Debug logging
+	log.Printf("[Auth] VerifyChallenge: front=%d back=%d md5=%s", front, back, storedMD5Hex)
+	log.Printf("[Auth] Challenge string: %s", str)
+	log.Printf("[Auth] Expected SHA1: %02x", expected[:])
+	log.Printf("[Auth] Client SHA1:   %02x", response)
+
 	// Bandingkan byte-by-byte
 	for i := 0; i < 20; i++ {
 		if response[i] != expected[i] {

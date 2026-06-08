@@ -12,6 +12,7 @@ import (
 	"lumeris-go/internal/config"
 	"lumeris-go/internal/db"
 	"lumeris-go/internal/login"
+	"lumeris-go/internal/mapserver"
 	"lumeris-go/internal/netio"
 	"lumeris-go/internal/register"
 )
@@ -59,6 +60,14 @@ func main() {
 	}
 	log.Printf("Login server listening on %s", cfg.ListenLogin)
 
+	// Start Map listener (:12024)
+	mapHandler := mapserver.NewMapHandler(store)
+	mapListener := netio.New(cfg.ListenMap, mapHandler.Dispatch())
+	if err := mapListener.Start(); err != nil {
+		log.Fatalf("Map listener error: %v", err)
+	}
+	log.Printf("Map server listening on %s", cfg.ListenMap)
+
 	// Start HTTP register server
 	registerServer := register.NewServer(cfg.PortHTTP, store)
 	go func() {
@@ -77,6 +86,7 @@ func main() {
 	log.Println("Shutting down...")
 	validationListener.Close()
 	loginListener.Close()
+	mapListener.Close()
 	registerServer.Stop(ctx)
 	log.Println("Server stopped")
 }
