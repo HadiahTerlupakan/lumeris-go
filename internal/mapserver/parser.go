@@ -8,22 +8,23 @@ import (
 // ParsedSendVersion adalah hasil parse CSMG_SEND_VERSION.
 type ParsedSendVersion struct {
 	Version      string
-	VersionBytes [4]byte
+	VersionBytes [6]byte
 }
 
-// ParseSendVersion mem-parse CSMG_SEND_VERSION (offset 2, size 10).
-// C#: GetBytes(6, 4) → offset 6, 4 bytes
+// ParseSendVersion mem-parse CSMG_SEND_VERSION.
+// DecodeFrame sudah melepas 2-byte opcode ID, jadi `data` adalah payload murni
+// dengan layout identik login.ParseSendVersion: 6 version bytes di offset 2.
 func ParseSendVersion(data []byte) (*ParsedSendVersion, error) {
-	if len(data) < 10 {
+	if len(data) < 8 {
 		return nil, fmt.Errorf("CSMG_SEND_VERSION terlalu pendek: %d bytes", len(data))
 	}
 
 	result := &ParsedSendVersion{}
-	// Version bytes at offset 6 (4 bytes)
-	copy(result.VersionBytes[:], data[6:10])
-	result.Version = fmt.Sprintf("%02X%02X%02X%02X",
+	copy(result.VersionBytes[:], data[2:8])
+	result.Version = fmt.Sprintf("%02X%02X%02X%02X%02X%02X",
 		result.VersionBytes[0], result.VersionBytes[1],
-		result.VersionBytes[2], result.VersionBytes[3])
+		result.VersionBytes[2], result.VersionBytes[3],
+		result.VersionBytes[4], result.VersionBytes[5])
 
 	return result, nil
 }
@@ -35,40 +36,38 @@ type ParsedLogin struct {
 	MacAddress string
 }
 
-// ParseLogin mem-parse CSMG_LOGIN (offset 8, size 55).
-// C# CSMG_LOGIN.cs line 28-44:
-// - offset 2: username length (1 byte)
-// - offset 3: username (ASCII)
-// - next: password length (1 byte)
-// - next: password (20 bytes SHA1)
-// - next: MAC address (ushort + uint = 6 bytes)
+// ParseLogin mem-parse CSMG_LOGIN dengan layout identik login.ParseLogin.
+// Password dikirim klien sebagai hex-string ASCII (40 char SHA1), bukan 20 raw bytes.
 func ParseLogin(data []byte) (*ParsedLogin, error) {
-	if len(data) < 10 {
-		return nil, fmt.Errorf("CSMG_LOGIN terlalu pendek")
+	if len(data) < 4 {
+		return nil, fmt.Errorf("CSMG_LOGIN terlalu pendek: %d bytes", len(data))
 	}
 
-	offset := 2
+	offset := 0
 	result := &ParsedLogin{}
 
-	// Username length
 	nameLen := int(data[offset])
 	offset++
 	if offset+nameLen > len(data) {
 		return nil, fmt.Errorf("username length overflow")
 	}
-	result.Username = string(data[offset : offset+nameLen-1]) // -1 untuk \0
+	result.Username = string(data[offset : offset+nameLen-1])
 	offset += nameLen
 
-	// Password length
+	if offset >= len(data) {
+		return nil, fmt.Errorf("password missing")
+	}
 	passLen := int(data[offset])
 	offset++
 	if offset+passLen > len(data) {
 		return nil, fmt.Errorf("password length overflow")
 	}
-	copy(result.Password[:], data[offset:offset+passLen-1]) // -1 untuk \0
+	passwordHex := string(data[offset : offset+passLen-1])
+	for i := 0; i+1 < len(passwordHex) && i/2 < len(result.Password); i += 2 {
+		fmt.Sscanf(passwordHex[i:i+2], "%02x", &result.Password[i/2])
+	}
 	offset += passLen
 
-	// MAC address (2 bytes ushort + 4 bytes uint)
 	if offset+6 <= len(data) {
 		a := binary.BigEndian.Uint16(data[offset : offset+2])
 		offset += 2
@@ -84,14 +83,13 @@ type ParsedCharSlot struct {
 	Slot uint8
 }
 
-// ParseCharSlot mem-parse CSMG_CHAR_SLOT.
-// Minimal packet: 1 byte slot number at offset 2
+// ParseCharSlot mem-parse CSMG_CHAR_SLOT: 1 byte slot di offset 0.
 func ParseCharSlot(data []byte) (*ParsedCharSlot, error) {
-	if len(data) < 3 {
+	if len(data) < 1 {
 		return nil, fmt.Errorf("CSMG_CHAR_SLOT terlalu pendek")
 	}
 
 	return &ParsedCharSlot{
-		Slot: data[2],
+		Slot: data[0],
 	}, nil
 }

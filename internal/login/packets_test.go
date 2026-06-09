@@ -2,6 +2,7 @@ package login
 
 import (
 	"bytes"
+	"encoding/hex"
 	"testing"
 
 	"lumeris-go/internal/model"
@@ -10,13 +11,14 @@ import (
 func TestBuildVersionACK(t *testing.T) {
 	versionBytes := []byte{0x01, 0x02, 0x03, 0x04, 0x05, 0x06}
 	data := BuildVersionACK(0, versionBytes)
-	if len(data) != 10 {
+	// Body setelah ID = result uint16@0 + version 6 byte@2 = 8 byte (C# data[2..9]).
+	if len(data) != 8 {
 		t.Fatalf("VERSION_ACK panjang salah: %d", len(data))
 	}
 	if getUint16BE(data, 0) != 0 {
 		t.Error("VERSION_ACK result bukan 0")
 	}
-	if !bytes.Equal(data[4:10], versionBytes) {
+	if !bytes.Equal(data[2:8], versionBytes) {
 		t.Error("VERSION_ACK version bytes salah")
 	}
 }
@@ -38,7 +40,8 @@ func TestBuildLoginAllowed(t *testing.T) {
 
 func TestBuildLoginACK(t *testing.T) {
 	data := BuildLoginACK(LOGIN_OK, 42)
-	if len(data) != 16 {
+	// Capture klien asli: body 17 byte (paket total 19 byte termasuk ID 2 byte).
+	if len(data) != 17 {
 		t.Fatalf("LOGIN_ACK panjang salah: %d", len(data))
 	}
 	if getUint32BE(data, 0) != LOGIN_OK {
@@ -78,39 +81,58 @@ func TestBuildCharData(t *testing.T) {
 		QuestRemaining: 3,
 		JobLevel1:      5,
 	}
-	data := BuildCharData(char)
-	if len(data) != 131 {
-		t.Fatalf("CHAR_DATA panjang salah: %d", len(data))
+	data := BuildCharData([]*model.Character{char})
+	// Saga18 array-4 body = 147 byte saat hanya slot 0 terisi nama "TestChar" (8 char).
+	// nameMarker(1) + [9 slot0][1 slot1][1 slot2][1 slot3] = 13 nama,
+	// lalu 20 blok field. Total tetap = capture 147 saat 2 nama (Larazeta+Recoil=14).
+	// Di sini 1 nama 8-char => 13 byte nama, body = 13 + 134 = 147 - (14-8) = 141.
+	wantLen := 1 + (1 + 8) + 1 + 1 + 1 + // names: marker + slot0(len+8) + 3 empty
+		(1 + 4) + // Race
+		(1 + 4) + // Form
+		(1 + 4) + // Gender
+		(1 + 8) + // HairStyle (2B×4)
+		(1 + 4) + // HairColor
+		(1 + 8) + // Wig (2B×4)
+		(1 + 4) + // Exist
+		(1 + 8) + // Face (2B×4)
+		(1 + 4) + // Rebirth
+		(1 + 4) + // Tail
+		(1 + 4) + // Wing
+		(1 + 4) + // WingColor
+		(1 + 4) + // Job
+		(1 + 16) + // Map (4B×4)
+		(1 + 4) + // Lv
+		(1 + 4) + // Job1
+		(1 + 8) + // Quest (2B×4)
+		(1 + 4) + // Job2X
+		(1 + 4) + // Job2T
+		(1 + 4) // Job3
+	if len(data) != wantLen {
+		t.Fatalf("CHAR_DATA panjang salah: got %d, want %d", len(data), wantLen)
 	}
-	// Verifikasi field kunci
-	if getUint32BE(data, 0) != 123 {
-		t.Error("CharID salah")
+	// nameMarker harus 0x04
+	if data[0] != 0x04 {
+		t.Errorf("name marker = %d, harus 4", data[0])
 	}
-	if data[4] != 0 {
-		t.Error("Slot salah")
+	// Slot0 nama: len=8, "TestChar"
+	if data[1] != 8 || string(data[2:10]) != "TestChar" {
+		t.Errorf("nama slot0 salah: len=%d %q", data[1], string(data[2:10]))
 	}
-	if string(bytes.TrimRight(data[5:37], "\x00")) != "TestChar" {
-		t.Errorf("Name salah: %q", string(bytes.TrimRight(data[5:37], "\x00")))
-	}
-	if data[37] != 1 {
-		t.Error("Race salah")
-	}
-	if data[39] != 1 {
-		t.Error("Job salah")
-	}
-	if data[40] != 5 {
-		t.Error("Level salah")
+	// Slot 1-3 kosong (len 0)
+	if data[10] != 0 || data[11] != 0 || data[12] != 0 {
+		t.Error("slot kosong harus len 0")
 	}
 }
 
 func TestBuildCharEquip(t *testing.T) {
 	data := BuildCharEquip()
-	if len(data) != 230 {
+	// Saga18: 4 slot × [marker 0x0D][13 uint32] = 4×53 = 212 byte.
+	if len(data) != 212 {
 		t.Fatalf("CHAR_EQUIP panjang salah: %d", len(data))
 	}
-	// Verifikasi marker 0x0E
-	if data[0] != 0x0E || data[57] != 0x0E || data[114] != 0x0E || data[171] != 0x0E {
-		t.Error("CHAR_EQUIP marker 0x0E salah")
+	// Marker 0x0D di offset 0, 53, 106, 159
+	if data[0] != 0x0D || data[53] != 0x0D || data[106] != 0x0D || data[159] != 0x0D {
+		t.Error("CHAR_EQUIP marker 0x0D salah")
 	}
 }
 
@@ -135,27 +157,18 @@ func TestBuildSendToMapServer(t *testing.T) {
 }
 
 func TestParseLogin(t *testing.T) {
-	// Simulasi CSMG_LOGIN packet:
-	// uLen=5("test"+\0), user="test", gap 1 byte, pLen=21(20 byte SHA1+\0), pass=20 byte, MAC=6 byte
-	data := make([]byte, 1+5+1+1+21+6)
-	offset := 0
-	// Username "test"
-	data[offset] = 5 // uLen (termasuk \0)
-	offset++
-	copy(data[offset:], []byte("test\x00"))
-	offset += 5
-	// Gap (ASIMETRI)
-	offset++ // ini yang penting!
-	// Password (20 byte SHA1)
-	data[offset] = 21 // pLen (20 + \0)
-	offset++
-	pass := []byte("01234567890123456789") // 20 byte dummy
-	copy(data[offset:], pass)
-	data[offset+20] = 0 // null terminator
-	offset += 21
-	// MAC 6 byte
+	// Wire format nyata (dari capture 63-byte): TANPA gap antara username & password.
+	// uLen(termasuk \0), user, pLen(termasuk \0), pass(40-char hex), MAC 6 byte.
+	// Pakai password hex 40-char (SHA1) seperti yang dikirim klien asli.
+	passHex := "0123456789abcdef0123456789abcdef01234567" // 40 char hex
+	data := make([]byte, 0, 1+5+1+len(passHex)+1+6)
+	data = append(data, 5)                  // uLen ("test" + \0)
+	data = append(data, []byte("test\x00")...)
+	data = append(data, byte(len(passHex)+1)) // pLen (hex + \0)
+	data = append(data, []byte(passHex)...)
+	data = append(data, 0) // null terminator password
 	mac := []byte{0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF}
-	copy(data[offset:], mac)
+	data = append(data, mac...)
 
 	parsed, err := ParseLogin(data)
 	if err != nil {
@@ -164,8 +177,10 @@ func TestParseLogin(t *testing.T) {
 	if parsed.Username != "test" {
 		t.Errorf("Username salah: %q", parsed.Username)
 	}
-	if !bytes.Equal(parsed.Password, pass) {
-		t.Error("Password salah")
+	// Password di-decode dari hex jadi 20 byte raw.
+	wantPass, _ := hex.DecodeString(passHex)
+	if !bytes.Equal(parsed.Password, wantPass) {
+		t.Errorf("Password salah: got %02x, want %02x", parsed.Password, wantPass)
 	}
 	if !bytes.Equal(parsed.MAC, mac) {
 		t.Error("MAC salah")

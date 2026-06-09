@@ -1,6 +1,7 @@
 package netio
 
 import (
+	"log"
 	"net"
 
 	"lumeris-go/internal/session"
@@ -36,7 +37,11 @@ func (l *Listener) acceptLoop() {
 			return // listener ditutup → keluar
 		}
 		s := session.New(conn, l.dispatch)
-		go func() { _ = s.Run() }()
+		go func() {
+			if err := s.Run(); err != nil {
+				log.Printf("[netio %s] session ended: %v", l.addr, err)
+			}
+		}()
 	}
 }
 

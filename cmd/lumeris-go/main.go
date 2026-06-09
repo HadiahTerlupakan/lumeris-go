@@ -50,7 +50,7 @@ func main() {
 	}
 
 	// Start Validation listener (:12022)
-	validationHandler := login.NewValidationHandler(store, cfg.DevMode)
+	validationHandler := login.NewValidationHandler(store, cfg.DevMode, cfg.PublicIP, cfg.ServerName, cfg.PortLogin)
 	validationListener := netio.New(cfg.ListenValidation, validationHandler.Dispatch())
 	if err := validationListener.Start(); err != nil {
 		log.Fatalf("Validation listener error: %v", err)

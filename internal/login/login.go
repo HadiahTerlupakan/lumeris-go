@@ -54,12 +54,11 @@ func (h *LoginHandler) OnSendVersion(s *session.Session, data []byte) error {
 		return err
 	}
 
-	// Sesuai C# SagaLogin/Network/Client/LoginClient.Login.cs
-	// Login server JUGA mengirim mystery packet yang sama seperti Validation
-	mysteryBody := []byte{0xE8, 0x6A, 0x6A, 0xCA, 0xDC, 0xE8, 0x06, 0x05, 0x2B, 0x29, 0xF8, 0x96, 0x2F, 0x86, 0x7C, 0xAB, 0x2A, 0x57, 0xAD, 0x30}
-	s.Send(0xFFFF, mysteryBody)
-	log.Printf("[Login] Sent mystery packet (ID=0xFFFF, body=20 bytes)")
-
+	// CATATAN: TIDAK ada mystery packet 0xFFFF dan TIDAK ada REQUEST_NYA (0x0150).
+	// Capture klien asli (proxy_packets.log fase Login) menunjukkan:
+	//   C->S 0x0001 -> S->C 0x0002 VERSION_ACK -> S->C 0x001E LOGIN_ALLOWED
+	//   -> C->S 0x001F LOGIN -> S->C 0x0020 LOGIN_ACK -> S->C 0x0028 CHAR_DATA
+	// Tidak ada 0xFFFF maupun 0x0150 di antaranya.
 	s.Send(SSMG_VERSION_ACK, BuildVersionACK(0, parsed.VersionBytes[:]))
 
 	// Generate new front & back word
@@ -69,7 +68,6 @@ func (h *LoginHandler) OnSendVersion(s *session.Session, data []byte) error {
 	s.Context = lctx
 
 	s.Send(SSMG_LOGIN_ALLOWED, BuildLoginAllowed(lctx.FrontWord, lctx.BackWord))
-	s.Send(SSMG_REQUEST_NYA, BuildRequestNya())
 
 	log.Printf("[Login] Version OK, challenge sent")
 	return nil
@@ -140,33 +138,17 @@ func (h *LoginHandler) sendCharData(s *session.Session, lctx *LoginContext) {
 	}
 	lctx.Characters = chars
 
-	for _, char := range chars {
-		s.Send(SSMG_CHAR_DATA, BuildCharData(char))
-		s.Send(SSMG_CHAR_EQUIP, BuildCharEquip())
-	}
+	// Saga18: CHAR_DATA berisi SEMUA slot (array-4) dalam SATU paket, diikuti CHAR_EQUIP.
+	s.Send(SSMG_CHAR_DATA, BuildCharData(chars))
+	s.Send(SSMG_CHAR_EQUIP, BuildCharEquip())
 }
 
-// OnCharStatus menangani CSMG_CHAR_STATUS: kirim data satu slot.
+// OnCharStatus menangani CSMG_CHAR_STATUS (0x002A).
+// Capture klien asli: setelah map LOGIN_ACK, klien kirim 0x002A di koneksi Login
+// dan MENUNGGU balasan 0x002B (body kosong) sebelum mengirim CHAR_SLOT ke map.
+// Tanpa balasan ini klien berhenti di loading map (gejala: layar hitam).
 func (h *LoginHandler) OnCharStatus(s *session.Session, data []byte) error {
-	parsed, err := ParseCharStatus(data)
-	if err != nil {
-		return err
-	}
-
-	lctx, ok := s.Context.(*LoginContext)
-	if !ok || lctx == nil || lctx.Account == nil {
-		return nil
-	}
-
-	// Cari char di slot ini
-	for _, char := range lctx.Characters {
-		if char.Slot == int(parsed.Slot) {
-			s.Send(SSMG_CHAR_DATA, BuildCharData(char))
-			s.Send(SSMG_CHAR_EQUIP, BuildCharEquip())
-			return nil
-		}
-	}
-	// Slot kosong: tidak kirim apa-apa (klien handle)
+	s.Send(SSMG_CHAR_STATUS_ACK, []byte{})
 	return nil
 }
 
@@ -202,9 +184,9 @@ func (h *LoginHandler) OnCharCreate(s *session.Session, data []byte) error {
 		Gender:         parsed.Gender,
 		Job:            1, // Job default
 		Level:          1,
-		MapID:          1,       // Starting map (milestone)
-		X:              100,     // Starting X
-		Y:              100,     // Starting Y
+		MapID:          30204000, // Start map Emil/Titania/Dominion (SagaLogin.xml StartupSetting)
+		X:              15,       // StartX dari config C# asli
+		Y:              16,       // StartY dari config C# asli
 		HP:             120,
 		MaxHP:          120,
 		SP:             100,

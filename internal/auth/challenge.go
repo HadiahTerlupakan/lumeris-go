@@ -33,11 +33,19 @@ func VerifyChallenge(storedMD5Hex string, front, back uint32, response []byte) b
 
 	// Format: "frontword" + "password_lowercase" + "backword" (as ASCII decimal strings)
 	// Contoh: "1234567890" + "851fdee206c1eec10cee5ec8e8962af2" + "9876543210"
-	str := fmt.Sprintf("%d%s%d", front, strings.ToLower(storedMD5Hex), back)
+	//
+	// PENTING: front & back diformat sebagai SIGNED int32, bukan unsigned.
+	// Klien eco.exe asli menyimpan challenge sebagai int32 (C# `int`) dan
+	// memanggil .ToString() -> nilai dgn bit-63 ke-31 set jadi NEGATIF.
+	// Server C# asli pakai Random.Next() yg selalu >= 0 sehingga bug ini tak
+	// pernah muncul, tetapi server Go mengisi penuh uint32 via crypto/rand,
+	// jadi ~50% challenge punya high-bit set. Tanpa cast int32 ini, SHA1 tak
+	// akan cocok untuk challenge bernilai besar (lihat capture testuser).
+	str := fmt.Sprintf("%d%s%d", int32(front), strings.ToLower(storedMD5Hex), int32(back))
 	expected := sha1.Sum([]byte(str))
 
 	// Debug logging
-	log.Printf("[Auth] VerifyChallenge: front=%d back=%d md5=%s", front, back, storedMD5Hex)
+	log.Printf("[Auth] VerifyChallenge: front=%d back=%d md5=%s", int32(front), int32(back), storedMD5Hex)
 	log.Printf("[Auth] Challenge string: %s", str)
 	log.Printf("[Auth] Expected SHA1: %02x", expected[:])
 	log.Printf("[Auth] Client SHA1:   %02x", response)

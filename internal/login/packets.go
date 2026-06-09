@@ -21,6 +21,7 @@ const (
 	// Outbound (S->C)
 	SSMG_VERSION_ACK        = 0x0002
 	SSMG_PONG               = 0x000B
+	SSMG_CHAR_STATUS_ACK    = 0x002B
 	SSMG_LOGIN_ALLOWED      = 0x001E
 	SSMG_LOGIN_ACK          = 0x0020
 	SSMG_CHAR_DATA          = 0x0028

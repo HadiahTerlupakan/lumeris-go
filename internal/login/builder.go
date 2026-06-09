@@ -31,19 +31,22 @@ func BuildLoginAllowed(front, back uint32) []byte {
 	return buf
 }
 
-// BuildLoginACK membuat SSMG_LOGIN_ACK packet.
-// result: LOGIN_OK / LOGIN_UNKNOWN_ACC / LOGIN_BADPASS / LOGIN_BFALOCK / LOGIN_ALREADY / LOGIN_IPBLOCK
-// accountID: ID akun yang login (0 bila gagal)
-// Layout byte-exact sesuai C# SSMG_LOGIN_ACK.cs:
-// 2 byte padding@0-1, result uint32@2, accountID uint32@6, RestTestTime uint32@10, TestEndTime uint32@14 (total 19 bytes)
+// BuildLoginACK membuat body SSMG_LOGIN_ACK.
+// Capture klien asli (proxy_packets.log baris 6) menunjukkan paket 19 byte:
+//
+//	00 20 | 00 00 00 00 | 00 00 60 F4 | 00 00 00 00 | 00 00 00 00 | 00
+//	 ID     result(4)     accountID(4)  RestTest(4)   TestEnd(4)    +1 byte
+//
+// ID 2 byte ditambah EncodeFrame, jadi body = 17 byte (BUKAN 16). Byte ke-17
+// (trailing) WAJIB ada; tanpa byte itu klien gagal parse struktur fixed-size
+// LOGIN_ACK dan berhenti tepat setelah login (tidak lanjut ke 0x002F).
 func BuildLoginACK(result, accountID uint32) []byte {
-	buf := make([]byte, 19)
-	// Offset 2: Result
-	putUint32BE(buf, 2, result)
-	// Offset 6: AccountID
-	putUint32BE(buf, 6, accountID)
-	// Offset 10: RestTestTime (default 0)
-	// Offset 14: TestEndTime (default 0)
+	buf := make([]byte, 17)
+	putUint32BE(buf, 0, result)
+	putUint32BE(buf, 4, accountID)
+	// Offset 8: RestTestTime (default 0)
+	// Offset 12: TestEndTime (default 0)
+	// Offset 16: trailing byte (default 0) — sesuai capture
 	return buf
 }
 
@@ -57,45 +60,23 @@ func BuildServerListStart() []byte {
 	return []byte{}
 }
 
-// BuildServerListSend membuat SSMG_SERVER_LST_SEND packet.
-// C# structure (SSMG_SERVER_LST_SEND.cs):
-// - Offset 0-1: padding (initial 4 bytes, offset=2)
-// - Offset 2: nameLen (including \0)
-// - Offset 3+: name bytes + \0
-// - Offset (3+nameLen): ipLen (including \0)
-// - Offset (3+nameLen+1): ip bytes + \0
+// BuildServerListSend membuat body SSMG_SERVER_LST_SEND.
+// C# SSMG_SERVER_LST_SEND.cs menulis nameLen di data[2] karena data[0-1] adalah ID
+// paket. EncodeFrame Go sudah menambahkan ID sebagai field terpisah, jadi body di sini
+// TIDAK menyertakan ID maupun padding — langsung mulai dari nameLen:
+//
+//	[nameLen 1][name + \0][ipLen 1][ip + \0]
+//
+// nameLen & ipLen termasuk byte \0 (C#: buf = Unicode.GetBytes(value+"\0"); PutByte(buf.Length)).
 func BuildServerListSend(name, ip string) []byte {
-	nameBytes := []byte(name)
-	ipBytes := []byte(ip)
+	nameBytes := append([]byte(name), 0) // name + \0
+	ipBytes := append([]byte(ip), 0)      // ip + \0
 
-	nameLen := len(nameBytes) + 1 // +1 untuk \0
-	ipLen := len(ipBytes) + 1     // +1 untuk \0
-
-	// Total: 2 (padding) + 1 (nameLen) + nameLen + 1 (ipLen) + ipLen
-	totalLen := 2 + 1 + nameLen + 1 + ipLen
-	buf := make([]byte, totalLen)
-
-	offset := 2 // Start at offset 2 (skip padding)
-
-	// Name length at offset 2
-	buf[offset] = byte(nameLen)
-	offset++
-
-	// Name bytes + \0 at offset 3
-	copy(buf[offset:], nameBytes)
-	offset += len(nameBytes)
-	buf[offset] = 0 // \0
-	offset++
-
-	// IP length at offset (3 + nameLen)
-	buf[offset] = byte(ipLen)
-	offset++
-
-	// IP bytes + \0
-	copy(buf[offset:], ipBytes)
-	offset += len(ipBytes)
-	buf[offset] = 0 // \0
-
+	buf := make([]byte, 0, 1+len(nameBytes)+1+len(ipBytes))
+	buf = append(buf, byte(len(nameBytes)))
+	buf = append(buf, nameBytes...)
+	buf = append(buf, byte(len(ipBytes)))
+	buf = append(buf, ipBytes...)
 	return buf
 }
 
@@ -104,81 +85,111 @@ func BuildServerListEnd() []byte {
 	return []byte{}
 }
 
-// BuildCharData membuat SSMG_CHAR_DATA packet (Saga11: 131 byte base).
-// Simplified version untuk milestone - field utama saja.
-func BuildCharData(char *model.Character) []byte {
-	buf := make([]byte, 131)
-	// Offset layout (simplified, byte-exact sesuai RE nanti di integrasi):
-	// 0-3: CharID (uint32)
-	putUint32BE(buf, 0, uint32(char.ID))
-	// 4: Slot
-	buf[4] = byte(char.Slot)
-	// 5-36: Name (32 byte, null-terminated string)
-	nameBytes := []byte(char.Name)
-	if len(nameBytes) > 31 {
-		nameBytes = nameBytes[:31]
+// BuildCharData membuat SSMG_CHAR_DATA packet (Saga18, format array-4-slot).
+// Diverifikasi byte-exact dari capture klien asli (proxy_packets.log, body 147 byte).
+//
+// Struktur: [nameMarker 4][4× nama len-prefixed (TANPA \0)] lalu tiap field adalah
+// blok [marker 4][4 slot × ukuran]. Urutan & ukuran field (per slot):
+//
+//	Race1 Form1 Gender1 HairStyle2 HairColor1 Wig2 Exist1 Face2 Rebirth1
+//	Tail1 Wing1 WingColor1 Job1 Map4 Lv1 Job1_1 Quest2 Job2X1 Job2T1 Job3_1
+//
+// chars dipetakan ke slot 0..3 lewat field Slot; slot kosong = nilai nol, Exist=0.
+func BuildCharData(chars []*model.Character) []byte {
+	// Index karakter per-slot (0..3).
+	bySlot := [4]*model.Character{}
+	for _, c := range chars {
+		if c.Slot >= 0 && c.Slot < 4 {
+			bySlot[c.Slot] = c
+		}
 	}
-	copy(buf[5:], nameBytes)
-	// 37: Race
-	buf[37] = char.Race
-	// 38: Gender
-	buf[38] = char.Gender
-	// 39: Job
-	buf[39] = byte(char.Job)
-	// 40: Level
-	buf[40] = byte(char.Level)
-	// 41-44: HP (uint32)
-	putUint32BE(buf, 41, uint32(char.HP))
-	// 45-48: MaxHP (uint32)
-	putUint32BE(buf, 45, uint32(char.MaxHP))
-	// 49-52: SP (uint32)
-	putUint32BE(buf, 49, uint32(char.SP))
-	// 53-56: MaxSP (uint32)
-	putUint32BE(buf, 53, uint32(char.MaxSP))
-	// 57: Str, 58: Dex, 59: Int, 60: Vit, 61: Agi, 62: Mnd
-	buf[57] = byte(char.Str)
-	buf[58] = byte(char.Dex)
-	buf[59] = byte(char.Int)
-	buf[60] = byte(char.Vit)
-	buf[61] = byte(char.Agi)
-	buf[62] = byte(char.Mnd)
-	// 63: Hair, 64: HairColor, 65-66: Face (uint16)
-	buf[63] = byte(char.Appearance.Hair)
-	buf[64] = byte(char.Appearance.HairColor)
-	putUint16BE(buf, 65, uint16(char.Face))
-	// 67: Form, 68: Wig
-	buf[67] = char.Form
-	buf[68] = char.Wig
-	// 69-72: MapID (uint32)
-	putUint32BE(buf, 69, uint32(char.MapID))
-	// 73-76: X, 77-80: Y (uint32 each)
-	putUint32BE(buf, 73, uint32(char.X))
-	putUint32BE(buf, 77, uint32(char.Y))
-	// 81: QuestRemaining
-	buf[81] = byte(char.QuestRemaining)
-	// 82-85: JobLevel1, 86-89: JobLevel2X, 90-93: JobLevel2T, 94-97: JobLevel3 (uint32 each)
-	putUint32BE(buf, 82, uint32(char.JobLevel1))
-	putUint32BE(buf, 86, uint32(char.JobLevel2X))
-	putUint32BE(buf, 90, uint32(char.JobLevel2T))
-	putUint32BE(buf, 94, uint32(char.JobLevel3))
-	// 98: Rebirth (bool as byte)
-	if char.Rebirth {
-		buf[98] = 1
+
+	buf := make([]byte, 0, 147)
+
+	// Nama: marker 0x04, lalu 4 nama len-prefixed (UTF-8, tanpa null terminator).
+	buf = append(buf, 0x04)
+	for i := 0; i < 4; i++ {
+		if c := bySlot[i]; c != nil {
+			nb := []byte(c.Name)
+			if len(nb) > 255 {
+				nb = nb[:255]
+			}
+			buf = append(buf, byte(len(nb)))
+			buf = append(buf, nb...)
+		} else {
+			buf = append(buf, 0x00) // slot kosong: panjang 0
+		}
 	}
-	// Sisa byte: padding/reserved (nol)
+
+	// Helper: tulis satu blok field [marker 0x04][4 slot × sz], pakai writer per-slot.
+	block := func(sz int, write func(c *model.Character, dst []byte)) {
+		buf = append(buf, 0x04)
+		for i := 0; i < 4; i++ {
+			slot := make([]byte, sz)
+			if c := bySlot[i]; c != nil {
+				write(c, slot)
+			}
+			buf = append(buf, slot...)
+		}
+	}
+
+	// Race (1)
+	block(1, func(c *model.Character, dst []byte) { dst[0] = c.Race })
+	// Form (1)
+	block(1, func(c *model.Character, dst []byte) { dst[0] = c.Form })
+	// Gender (1)
+	block(1, func(c *model.Character, dst []byte) { dst[0] = c.Gender })
+	// HairStyle (2 BE)
+	block(2, func(c *model.Character, dst []byte) { putUint16BE(dst, 0, uint16(c.Appearance.Hair)) })
+	// HairColor (1)
+	block(1, func(c *model.Character, dst []byte) { dst[0] = byte(c.Appearance.HairColor) })
+	// Wig (2 BE) — 0xFFFF = tanpa wig
+	block(2, func(c *model.Character, dst []byte) { putUint16BE(dst, 0, uint16(c.Wig)) })
+	// Exist (1) — 0xFF jika ada
+	block(1, func(c *model.Character, dst []byte) { dst[0] = 0xFF })
+	// Face (2 BE)
+	block(2, func(c *model.Character, dst []byte) { putUint16BE(dst, 0, uint16(c.Face)) })
+	// Rebirth (1) — 0x64 jika rebirth, else 0
+	block(1, func(c *model.Character, dst []byte) {
+		if c.Rebirth {
+			dst[0] = 0x64
+		}
+	})
+	// Tail (1)
+	block(1, func(c *model.Character, dst []byte) {})
+	// Wing (1)
+	block(1, func(c *model.Character, dst []byte) {})
+	// WingColor (1)
+	block(1, func(c *model.Character, dst []byte) {})
+	// Job (1)
+	block(1, func(c *model.Character, dst []byte) { dst[0] = byte(c.Job) })
+	// Map (4 BE)
+	block(4, func(c *model.Character, dst []byte) { putUint32BE(dst, 0, uint32(c.MapID)) })
+	// Lv (1)
+	block(1, func(c *model.Character, dst []byte) { dst[0] = byte(c.Level) })
+	// Job1 (1)
+	block(1, func(c *model.Character, dst []byte) { dst[0] = byte(c.JobLevel1) })
+	// Quest (2 BE)
+	block(2, func(c *model.Character, dst []byte) { putUint16BE(dst, 0, uint16(c.QuestRemaining)) })
+	// Job2X (1)
+	block(1, func(c *model.Character, dst []byte) { dst[0] = byte(c.JobLevel2X) })
+	// Job2T (1)
+	block(1, func(c *model.Character, dst []byte) { dst[0] = byte(c.JobLevel2T) })
+	// Job3 (1)
+	block(1, func(c *model.Character, dst []byte) { dst[0] = byte(c.JobLevel3) })
+
 	return buf
 }
 
-// BuildCharEquip membuat SSMG_CHAR_EQUIP packet (Saga11: 230 byte).
-// Milestone: kirim kosong/nol (inventory belum diimplementasi).
+// BuildCharEquip membuat SSMG_CHAR_EQUIP packet (Saga18, 212-byte body).
+// Diverifikasi dari capture: 4 slot × [marker 0x0D=13][13 × uint32 BE] = 4×53 = 212.
+// Milestone: equipment kosong (semua uint32 nol), marker tetap dipasang.
 func BuildCharEquip() []byte {
-	buf := make([]byte, 230)
-	// Marker 0x0E di offset 0, 57, 114, 171 (4 slot)
-	buf[0] = 0x0E
-	buf[57] = 0x0E
-	buf[114] = 0x0E
-	buf[171] = 0x0E
-	// Sisa nol = no equipment
+	const slotSize = 1 + 13*4 // marker + 13 uint32 = 53
+	buf := make([]byte, 4*slotSize)
+	for i := 0; i < 4; i++ {
+		buf[i*slotSize] = 0x0D // marker = jumlah slot equip (13)
+	}
 	return buf
 }
 

@@ -3,8 +3,8 @@ package auth
 import (
 	"crypto/md5"
 	"crypto/sha1"
-	"encoding/binary"
 	"encoding/hex"
+	"fmt"
 	"testing"
 )
 
@@ -27,16 +27,33 @@ func TestVerifyChallengeValid(t *testing.T) {
 	front := uint32(0x12345678)
 	back := uint32(0x9ABCDEF0)
 
-	// Klien hitung: SHA1(front + storedMD5 + back)
-	buf := make([]byte, 4+32+4)
-	binary.BigEndian.PutUint32(buf[0:4], front)
-	copy(buf[4:36], []byte(storedMD5))
-	binary.BigEndian.PutUint32(buf[36:40], back)
-	response := sha1.Sum(buf)
+	// Klien hitung sama seperti C# MySQLAccountDB.CheckPassword:
+	// SHA1(frontword_DESIMAL + storedMD5_lowercase + backword_DESIMAL)
+	// frontword/backword dirender sebagai angka desimal SIGNED int32
+	// (C# `int`), persis seperti yang dilakukan klien eco.exe asli.
+	str := fmt.Sprintf("%d%s%d", int32(front), storedMD5, int32(back))
+	response := sha1.Sum([]byte(str))
 
 	// Verifikasi
 	if !VerifyChallenge(storedMD5, front, back, response[:]) {
 		t.Error("VerifyChallenge gagal untuk response valid")
+	}
+}
+
+// TestVerifyChallengeRealClient adalah vektor regresi dari capture klien eco.exe
+// asli (server_run.err, user "testuser"). Challenge front=0x882c60d7 punya
+// high-bit set, sehingga klien memperlakukannya sebagai int32 NEGATIF. Tanpa
+// cast int32 di VerifyChallenge, login challenge bernilai besar selalu gagal.
+func TestVerifyChallengeRealClient(t *testing.T) {
+	storedMD5 := "cc03e747a6afbbcbf8be7668acfebee5"
+	front := uint32(0x882c60d7) // 2284609751 unsigned / -2010357545 signed
+	back := uint32(0xf6efe442)  // 4142916674 unsigned / -152050622 signed
+
+	// Response SHA1 persis yang dikirim klien asli di capture.
+	response, _ := hex.DecodeString("5adc7066439baaf67e092d514cfb8f08b68e35e3")
+
+	if !VerifyChallenge(storedMD5, front, back, response) {
+		t.Error("VerifyChallenge gagal untuk vektor klien eco.exe asli (regresi signed int32)")
 	}
 }
 

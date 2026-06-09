@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/binary"
+	"fmt"
 	"log"
 
 	"lumeris-go/internal/auth"
@@ -21,13 +22,16 @@ type ValidationContext struct {
 
 // ValidationHandler adalah dispatcher untuk Validation server (:12022).
 type ValidationHandler struct {
-	store   db.Store
-	devMode bool
+	store      db.Store
+	devMode    bool
+	publicIP   string
+	serverName string
+	loginPort  int
 }
 
 // NewValidationHandler membuat handler baru.
-func NewValidationHandler(store db.Store, devMode bool) *ValidationHandler {
-	return &ValidationHandler{store: store, devMode: devMode}
+func NewValidationHandler(store db.Store, devMode bool, publicIP, serverName string, loginPort int) *ValidationHandler {
+	return &ValidationHandler{store: store, devMode: devMode, publicIP: publicIP, serverName: serverName, loginPort: loginPort}
 }
 
 // Dispatch mengembalikan dispatch table untuk Validation server.
@@ -51,20 +55,19 @@ func (h *ValidationHandler) OnSendVersion(s *session.Session, data []byte) error
 
 	log.Printf("[Validation] Client version bytes: %02x", parsed.VersionBytes)
 
-	// Sesuai docs/protocol/login-flow-tahap-1-4.md line 71 & C# ValidationClient.cs:191-195
-	// Mystery packet: FF FF E8 6A 6A CA DC E8 06 05 2B 29 F8 96 2F 86 7C AB 2A 57 AD 30
-	// C# membuat Packet object dengan p3.data = buf, lalu SendPacket(p3)
-	// Byte pertama FF FF adalah packet ID (0xFFFF), sisanya adalah body (20 bytes)
-	mysteryBody := []byte{0xE8, 0x6A, 0x6A, 0xCA, 0xDC, 0xE8, 0x06, 0x05, 0x2B, 0x29, 0xF8, 0x96, 0x2F, 0x86, 0x7C, 0xAB, 0x2A, 0x57, 0xAD, 0x30}
-	s.Send(0xFFFF, mysteryBody)
-	log.Printf("[Validation] Sent mystery packet (ID=0xFFFF, body=20 bytes)")
+	// CATATAN: TIDAK ada mystery packet 0xFFFF di sini.
+	// Capture klien asli (proxy_packets.log) menunjukkan urutan:
+	//   C->S 0x0001 -> S->C 0x0002 VERSION_ACK -> S->C 0x001E LOGIN_ALLOWED
+	// Tidak ada paket 0xFFFF di mana pun. Paket itu quirk C# SagaECO yang
+	// membuat klien eco.exe (NekogameECO) tidak melanjutkan ke 0x002F setelah
+	// login. Sempat dihapus (commit 93de...) lalu tak sengaja muncul lagi.
 
-	// 2. Kirim VERSION_ACK
+	// 1. Kirim VERSION_ACK
 	ackData := BuildVersionACK(0, parsed.VersionBytes[:])
 	log.Printf("[Validation] Sending VERSION_ACK (len=%d): %02x", len(ackData), ackData)
 	s.Send(SSMG_VERSION_ACK, ackData)
 
-	// 3. Generate front & back word untuk challenge
+	// 2. Generate front & back word untuk challenge
 	vctx := &ValidationContext{}
 	binary.Read(rand.Reader, binary.BigEndian, &vctx.FrontWord)
 	binary.Read(rand.Reader, binary.BigEndian, &vctx.BackWord)
@@ -143,19 +146,17 @@ func (h *ValidationHandler) OnLogin(s *session.Session, data []byte) error {
 func (h *ValidationHandler) OnServerletAsk(s *session.Session, data []byte) error {
 	log.Printf("[Validation] OnServerletAsk called - sending server list")
 
-	// Format IP sesuai NekogameECO capture:
-	// "P" prefix + IP:PORT (4 copies separated by comma)
-	ip := "127.0.0.1:12023"
-	ipFormat := "P" + ip + "," + ip + "," + ip + "," + ip
+	// Format IP sesuai capture klien asli (proxy_packets.log baris 11):
+	//   [nameLen][name\0][ipLen][ip\0]  dengan ip = "host:port,host:port,host:port,host:port"
+	// 0x50 di capture adalah BYTE panjang string IP (80), BUKAN prefix "P".
+	// Client butuh PORT Login server di sini agar bisa reconnect (TANPA port = stuck).
+	addr := fmt.Sprintf("%s:%d", h.publicIP, h.loginPort)
+	ipFormat := addr + "," + addr + "," + addr + "," + addr
 
 	s.Send(SSMG_SERVER_LST_START, BuildServerListStart())
-
-	// Kirim 2 server dengan nama ASCII sederhana
-	s.Send(SSMG_SERVER_LST_SEND, BuildServerListSend("Sakura", ipFormat))
-	s.Send(SSMG_SERVER_LST_SEND, BuildServerListSend("TestWorld", ipFormat))
-
+	s.Send(SSMG_SERVER_LST_SEND, BuildServerListSend(h.serverName, ipFormat))
 	s.Send(SSMG_SERVER_LST_END, BuildServerListEnd())
-	log.Printf("[Validation] Server list sent")
+	log.Printf("[Validation] Server list sent (addr=%s)", addr)
 	return nil
 }
 

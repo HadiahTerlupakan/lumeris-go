@@ -15,3 +15,12 @@
 
 # Local data
 *.log
+*.err
+*.pid
+
+# Local archive (scratch/debug files, old logs)
+/_archive/
+
+# opencode local config (contains API key) & runtime state
+opencode.json
+/.omo/
